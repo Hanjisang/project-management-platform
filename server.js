@@ -43,6 +43,10 @@ const initialIssues = [
   { id: 'issue-3', title: '标签打印字体偏小', project: '武汉市第四医院', type: '配置问题', level: '低', owner: '研发部', dueDate: '2026-07-14', status: '待验证' }
 ];
 const initialMessages = [{ id: 'msg-1', source: 'BOT_MENTION', project: '武汉儿童医院病理系统', content: '申请单接口已经联调通过，退费接口计划周五提供版本。报告图片地址在院内仍无法访问。', category: '问题与任务', status: '待确认', sender: '陈工（接口工程师）', receivedAt: '2026-07-14 10:32' }];
+const issueTypes = ['客户需求', '产品缺陷', '代码缺陷', '接口缺陷', '项目风险', '配置问题'];
+const issueLevels = ['高', '中', '低'];
+const permissionCodes = ['project.delete', 'knowledge.view', 'knowledge.create', 'knowledge.edit', 'knowledge.review', 'knowledge.delete'];
+function validateIssuePayload(body) { return issueTypes.includes(body.type || '其他问题') && issueLevels.includes(body.level || '中'); }
 
 function readDocuments() {
   if (!fs.existsSync(documentFile)) return initialDocuments;
@@ -101,6 +105,13 @@ function normalizeProjectPlanTracking(plan) {
       ? { id: `${task.id}-check-${checkIndex + 1}`, name: item, completed: false, completedAt: '' }
       : { ...item, id: item.id || `${task.id}-check-${checkIndex + 1}`, name: item.name || item.text || `检查项${checkIndex + 1}`, completed: Boolean(item.completed), completedAt: item.completedAt || '' });
   }));
+  return plan;
+}
+async function recalculateEntirePlan(pool, projectId, plan) {
+  normalizeProjectPlanTracking(plan);
+  for (const stage of plan.stages || []) for (const task of stage.tasks || []) {
+    await pool.execute('UPDATE tasks SET plan_task_id=?,name=?,stage=? WHERE project_id=? AND (plan_task_id=? OR (plan_task_id IS NULL AND name=?))', [task.id, task.name, stage.name, projectId, task.id, task.name]);
+  }
   return plan;
 }
 function syncSopPlan(oldPlan, sourceTemplate, metadata, mode = 'merge') {
@@ -174,12 +185,15 @@ async function persistChecklistPlan(pool,projectId,plan,planTask){const total=(p
 function readProjectPlans() { return fs.existsSync(projectPlanFile) ? JSON.parse(fs.readFileSync(projectPlanFile, 'utf8')) : {}; }
 function writeProjectPlans(plans) { fs.writeFileSync(projectPlanFile, JSON.stringify(plans, null, 2), 'utf8'); }
 function readAuditLogs() { return fs.existsSync(auditFile) ? JSON.parse(fs.readFileSync(auditFile, 'utf8')) : []; }
-let auditContext = { operator: '系统', ipAddress: '-' };
-function audit(action, targetType, targetId, detail) {
-  detail = `[用户:${auditContext.operator}][IP:${auditContext.ipAddress}] ${detail || ''}`;
-  const entry = { id: `audit-${Date.now()}`, action, targetType, targetId, detail, operator: '本地管理员', time: new Date().toLocaleString('zh-CN', { hour12: false }) };
+async function audit(action, targetType, targetId, detail, user, ipAddress) {
+  const operator = user?.displayName || user?.name || user?.username || user?.realName || '系统';
+  detail = `[用户:${operator}][IP:${ipAddress || '-'}] ${detail || ''}`;
+  const entry = { id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, action, targetType, targetId, detail, operator, time: new Date().toLocaleString('zh-CN', { hour12: false }) };
   const logs = readAuditLogs(); logs.unshift(entry); fs.writeFileSync(auditFile, JSON.stringify(logs.slice(0, 500), null, 2), 'utf8');
-  if (mysqlConfigured()) getPool().execute('INSERT INTO audit_logs (action, target_type, target_id, detail) VALUES (?, ?, ?, ?)', [action, targetType, String(targetId), detail || null]).catch(() => {});
+  if (mysqlConfigured()) {
+    try { await getPool().execute('INSERT INTO audit_logs (action, target_type, target_id, detail, operator_id) VALUES (?, ?, ?, ?, ?)', [action, targetType, String(targetId), detail || null, user?.sub || null]); }
+    catch (error) { console.error('审计日志写入数据库失败', { action, targetType, targetId, error: error.message }); }
+  }
 }
 function projectReferenceExists(reference) { return readProjects().some(project => project.name === reference || project.customer === reference); }
 function taskStatus(progress, dueDate) { if (progress >= 100) return '已完成'; if (new Date(`${dueDate}T23:59:59`) < new Date()) return '已延期'; return progress > 0 ? '进行中' : '未开始'; }
@@ -344,9 +358,16 @@ async function serveMysqlCoreApi(request, response, url) {
   if (!mysqlConfigured()) return false;
   const pool = getPool();
   const allowedRoles = ['admin', 'project_manager', 'project_member', 'developer', 'viewer'];
-  if(!global.projectExecutionReady){for(const sql of ["ALTER TABLE projects ADD COLUMN execution_status VARCHAR(32) NOT NULL DEFAULT '未启动'",'ALTER TABLE projects ADD COLUMN started_at DATETIME NULL','ALTER TABLE projects ADD COLUMN pause_started_at DATETIME NULL','ALTER TABLE projects ADD COLUMN paused_days INT UNSIGNED NOT NULL DEFAULT 0'])try{await pool.query(sql)}catch(e){}global.projectExecutionReady=true;}
-  await ensureTaskPlanLinkSchema(pool);
-  await ensureDocumentLinkSchema(pool);
+   // Schema changes are managed by scripts/migrate-round1-technical-audit.js.
+  const hasPermission = (permission) => request.user?.role === 'admin' || (request.user?.permissions || []).includes(permission);
+  if (request.method === 'GET' && url.pathname === '/api/project-user-options') {
+    if (!hasPermission('project.create')) return json(response, 403, { message: '无权创建项目' }), true;
+    const [rows] = await pool.query('SELECT u.id,u.username,u.display_name AS displayName,u.role,r.name AS roleName FROM users u LEFT JOIN roles r ON r.role_key=u.role WHERE u.status="active" ORDER BY u.display_name,u.id');
+    return json(response, 200, rows.map(row => ({ ...row, id: String(row.id) }))), true;
+  }
+  if (url.pathname === '/api/sop/template' || /^\/api\/sop\/templates(?:\/\d+)?$/.test(url.pathname)) {
+    if (['POST', 'PUT', 'PATCH'].includes(request.method) && !(hasPermission('sop.create') || hasPermission('sop.edit'))) return json(response, 403, { message: '无权维护SOP模板' }), true;
+  }
   if (url.pathname.startsWith('/api/integrations/zentao')) {
     await ensureZentaoSyncTable(pool);
     if (request.method === 'GET' && url.pathname === '/api/integrations/zentao/status') {
@@ -471,7 +492,7 @@ async function serveMysqlCoreApi(request, response, url) {
     await pool.execute("UPDATE projects SET execution_status='执行中',started_at=COALESCE(started_at,NOW()),paused_days=paused_days+CASE WHEN pause_started_at IS NULL THEN 0 ELSE DATEDIFF(NOW(),pause_started_at) END,pause_started_at=NULL,stage=? WHERE id=?",[stage.name,project.id]);audit('启动项目','project',project.id,stage.name);const [rows]=await pool.execute('SELECT p.*,0 AS openIssues,0 AS highRiskIssues FROM projects p WHERE id=?',[project.id]);return json(response,200,mysqlProject(rows[0])),true;
   }
   const projectLifecycleMatch=url.pathname.match(/^\/api\/projects\/(\d+)\/(pause|close)$/);
-  if(projectLifecycleMatch&&request.method==='POST'){if(!await projectAccessAllowed(pool,request.user,projectLifecycleMatch[1]))return json(response,403,{message:'无权操作该项目'}),true;const closing=projectLifecycleMatch[2]==='close';const [current]=await pool.execute('SELECT execution_status FROM projects WHERE id=?',[projectLifecycleMatch[1]]);if(!current[0])return json(response,404,{message:'项目不存在'}),true;if(!closing&&current[0].execution_status!=='执行中')return json(response,400,{message:'只有执行中的项目可以暂停'}),true;if(closing&&current[0].execution_status==='已结项')return json(response,400,{message:'项目已经结项'}),true;await pool.execute(closing?"UPDATE projects SET execution_status='已结项',progress=100,pause_started_at=NULL WHERE id=?":"UPDATE projects SET execution_status='已暂停',pause_started_at=COALESCE(pause_started_at,NOW()) WHERE id=?",[projectLifecycleMatch[1]]);audit(closing?'项目结项':'项目暂停','project',projectLifecycleMatch[1],'');const [rows]=await pool.execute('SELECT p.*,0 AS openIssues,0 AS highRiskIssues FROM projects p WHERE id=?',[projectLifecycleMatch[1]]);return json(response,200,mysqlProject(rows[0])),true;}
+   if(projectLifecycleMatch&&request.method==='POST'){if(!await projectAccessAllowed(pool,request.user,projectLifecycleMatch[1]))return json(response,403,{message:'无权操作该项目'}),true;const closing=projectLifecycleMatch[2]==='close';const [current]=await pool.execute('SELECT execution_status FROM projects WHERE id=?',[projectLifecycleMatch[1]]);if(!current[0])return json(response,404,{message:'项目不存在'}),true;if(!closing&&current[0].execution_status!=='执行中')return json(response,400,{message:'只有执行中的项目可以暂停'}),true;if(closing&&current[0].execution_status==='已结项')return json(response,400,{message:'项目已经结项'}),true;if(closing){const [blockers]=await Promise.all([pool.execute('SELECT COUNT(*) AS count FROM tasks WHERE project_id=? AND status<>"已完成"',[projectLifecycleMatch[1]]),pool.execute('SELECT COUNT(*) AS count FROM issues WHERE project_id=? AND status<>"已关闭"',[projectLifecycleMatch[1]]),pool.execute('SELECT COUNT(*) AS count FROM documents WHERE project_id=? AND status NOT IN ("已通过","已确认")',[projectLifecycleMatch[1]])]);const unfinishedTasks=Number(blockers[0][0][0].count),openIssues=Number(blockers[1][0][0].count),pendingDeliverables=Number(blockers[2][0][0].count);if(unfinishedTasks||openIssues||pendingDeliverables)return json(response,409,{message:'项目尚有结项阻塞项',blockers:{unfinishedTasks,openIssues,pendingDeliverables,total:unfinishedTasks+openIssues+pendingDeliverables}}),true;}await pool.execute(closing?"UPDATE projects SET execution_status='已结项',progress=100,pause_started_at=NULL WHERE id=?":"UPDATE projects SET execution_status='已暂停',pause_started_at=COALESCE(pause_started_at,NOW()) WHERE id=?",[projectLifecycleMatch[1]]);await audit(closing?'项目结项':'项目暂停','project',projectLifecycleMatch[1],'',request.user,request.ipAddress);const [rows]=await pool.execute('SELECT p.*,0 AS openIssues,0 AS highRiskIssues FROM projects p WHERE id=?',[projectLifecycleMatch[1]]);return json(response,200,mysqlProject(rows[0])),true;}
   if(projectChecklistMatch&&request.method==='PATCH'){
     if(!await projectAccessAllowed(pool,request.user,projectChecklistMatch[1]))return json(response,403,{message:'无权更新该项目检查项'}),true;const body=await readBody(request),[rows]=await pool.execute('SELECT plan_json FROM project_plans WHERE project_id=?',[projectChecklistMatch[1]]);if(!rows[0])return json(response,404,{message:'项目实施计划不存在'}),true;
     const plan=normalizeProjectPlanTracking(parseJsonColumn(rows[0].plan_json));let matchedTask,matchedCheck;for(const stage of plan.stages||[]){const task=(stage.tasks||[]).find(item=>String(item.id)===String(body.planTaskId));if(task){matchedTask=task;matchedCheck=(task.checklist||[]).find(item=>String(item.id)===String(body.checkId));break;}}
@@ -533,7 +554,7 @@ async function serveMysqlCoreApi(request, response, url) {
   const issueMatch = url.pathname.match(/^\/api\/issues\/([^/]+)$/);
   if (issueMatch && request.method === 'PUT') { const body = await readBody(request); const [found] = await pool.execute('SELECT id,project_id,title,type,level,owner_name,due_date,status FROM issues WHERE id=?', [issueMatch[1]]); if (!found[0]) return json(response, 404, { message: '问题不存在' }), true; if (!await projectAccessAllowed(pool, request.user, found[0].project_id)) return json(response, 403, { message: '无权更新该问题' }), true; const issue = found[0]; await pool.execute('UPDATE issues SET title=?,type=?,level=?,owner_name=?,due_date=?,status=? WHERE id=?', [body.title || issue.title, body.type || issue.type, body.level || issue.level, body.owner || issue.owner_name, body.dueDate || new Date(issue.due_date).toISOString().slice(0,10), body.status || issue.status, issue.id]); const [rows] = await pool.execute('SELECT i.id,i.title,p.name AS project,i.type,i.level,i.owner_name AS owner,DATE_FORMAT(i.due_date, "%Y-%m-%d") AS dueDate,i.status FROM issues i JOIN projects p ON p.id=i.project_id WHERE i.id=?', [issue.id]); audit('编辑问题风险', 'issue', issue.id, rows[0].title); return json(response, 200, { ...rows[0], id: String(rows[0].id) }), true; }
   if (issueMatch && request.method === 'PATCH') { const body = await readBody(request); const [found] = await pool.execute('SELECT project_id FROM issues WHERE id=?', [issueMatch[1]]); if (!found[0]) return json(response, 404, { message: '问题不存在' }), true; if (!await projectAccessAllowed(pool, request.user, found[0].project_id)) return json(response, 403, { message: '无权更新该问题' }), true; await pool.execute('UPDATE issues SET status=? WHERE id=?', [body.status || '待处理', issueMatch[1]]); const [rows] = await pool.execute('SELECT i.id,i.title,p.name AS project,i.type,i.level,i.owner_name AS owner,DATE_FORMAT(i.due_date, "%Y-%m-%d") AS dueDate,i.status FROM issues i JOIN projects p ON p.id=i.project_id WHERE i.id=?', [issueMatch[1]]); audit('更新问题状态', 'issue', issueMatch[1], rows[0].status); return json(response, 200, { ...rows[0], id: String(rows[0].id) }), true; }
-  if (request.method === 'GET' && url.pathname === '/api/messages') { const [rows] = await pool.query('SELECT m.id, COALESCE(p.name, "未归属") AS project, m.source, m.content, m.category, m.status, m.sender, DATE_FORMAT(m.received_at, "%Y-%m-%d %H:%i:%s") AS receivedAt FROM messages m LEFT JOIN projects p ON p.id=m.project_id ORDER BY m.id DESC'); return json(response, 200, rows.map(row => ({ ...row, id: String(row.id) }))), true; }
+  if (request.method === 'GET' && url.pathname === '/api/messages') { const allowed=await allowedProjectIds(pool,request.user); const [rows] = await pool.query('SELECT m.id, m.project_id AS projectId, COALESCE(p.name, "未归属") AS project, m.source, m.content, m.category, m.status, m.sender, DATE_FORMAT(m.received_at, "%Y-%m-%d %H:%i:%s") AS receivedAt FROM messages m LEFT JOIN projects p ON p.id=m.project_id ORDER BY m.id DESC'); return json(response, 200, rows.filter(row=>request.user?.role==='admin'||(row.projectId&&allowed.has(String(row.projectId)))).map(row => ({ ...row, id: String(row.id) }))), true; }
   if (request.method === 'GET' && url.pathname === '/api/dingtalk/monitor/overview') { const [rows] = await pool.query("SELECT COUNT(*) AS collectedMessages, SUM(status='待确认') AS pendingAnalysis, SUM(status='已确认') AS confirmedMessages, SUM(project_id IS NULL) AS unassignedMessages FROM messages"); const data = rows[0]; return json(response, 200, { streamStatus: '维护中', robotStatus: '运行正常', collectedMessages: Number(data.collectedMessages), pendingAnalysis: Number(data.pendingAnalysis || 0), confirmedMessages: Number(data.confirmedMessages || 0), failedMessages: 0, unassignedMessages: Number(data.unassignedMessages || 0) }), true; }
   const createMessage = async (body, source, category, sender) => { const [projects] = body.project ? await pool.execute('SELECT id FROM projects WHERE name=? OR customer=? LIMIT 1', [body.project, body.project]) : [[]]; const projectId = projects[0]?.id || null; const [result] = await pool.execute('INSERT INTO messages (project_id, source, content, category, status, sender) VALUES (?, ?, ?, ?, ?, ?)', [projectId, source, body.content, category, '待确认', body.sender || sender]); const [rows] = await pool.execute('SELECT m.id,COALESCE(p.name,"未归属") AS project,m.source,m.content,m.category,m.status,m.sender,DATE_FORMAT(m.received_at,"%Y-%m-%d %H:%i:%s") AS receivedAt FROM messages m LEFT JOIN projects p ON p.id=m.project_id WHERE m.id=?', [result.insertId]); return rows[0]; };
   if (request.method === 'POST' && url.pathname === '/api/messages/robot') { const body = await readBody(request); const message = await createMessage({ ...body, content: body.content || '@项目管理助手 模拟采集的项目沟通消息' }, 'BOT_MENTION', '待办任务', '项目成员'); return json(response, 201, { ...message, id: String(message.id) }), true; }
@@ -542,17 +563,30 @@ async function serveMysqlCoreApi(request, response, url) {
   const messageMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/confirm$/);
   if (messageMatch && request.method === 'POST') { const [rows] = await pool.execute('SELECT * FROM messages WHERE id=?', [messageMatch[1]]); const message = rows[0]; if (!message) return json(response, 404, { message: '消息不存在' }), true; if (message.project_id && !message.generated_task) { await pool.execute('INSERT INTO tasks (project_id,name,stage,owner_name,due_date,progress,status) VALUES (?, ?, ?, ?, ?, ?, ?)', [message.project_id, '完成接口测试版本并反馈结果', '接口对接', '研发部', '2026-07-17', 0, '未开始']); await pool.execute('INSERT INTO issues (project_id,title,type,level,owner_name,due_date,status) VALUES (?, ?, ?, ?, ?, ?, ?)', [message.project_id, '报告图片地址院内无法访问', '环境问题', '高', '接口组/院方', '2026-07-16', '待处理']); await pool.execute('UPDATE messages SET generated_task=1, generated_issue=1, status=? WHERE id=?', ['已确认', message.id]); } else await pool.execute('UPDATE messages SET status=? WHERE id=?', ['已确认', message.id]); const [updated] = await pool.execute('SELECT m.id,COALESCE(p.name,"未归属") AS project,m.source,m.content,m.category,m.status,m.sender,DATE_FORMAT(m.received_at,"%Y-%m-%d %H:%i:%s") AS receivedAt FROM messages m LEFT JOIN projects p ON p.id=m.project_id WHERE m.id=?', [message.id]); audit('确认AI采集消息', 'message', String(message.id), message.category); return json(response, 200, { ...updated[0], id: String(updated[0].id) }), true; }
   if (request.method === 'GET' && url.pathname === '/api/reports/weekly') {
+    const allowed=await allowedProjectIds(pool,request.user), projectFilter=request.user?.role==='admin'?'': ' WHERE p.id IN (SELECT project_id FROM project_members WHERE user_id=?)', filterParams=request.user?.role==='admin'?[]:[request.user.sub];
     const [projectRows, taskRows, issueRows, documentRows] = await Promise.all([
-      pool.query('SELECT COUNT(*) AS total, SUM(health="高风险") AS highRisk FROM projects'),
-      pool.query('SELECT COUNT(*) AS total, SUM(status="已完成") AS completed, SUM(status="进行中") AS inProgress, SUM(status="已延期") AS delayedCount FROM tasks'),
-      pool.query('SELECT COUNT(*) AS total, SUM(status<>"已关闭") AS open, SUM(level="高") AS highRisk FROM issues'),
-      pool.query('SELECT COUNT(*) AS total, SUM(status IN ("已通过","已确认")) AS approved FROM documents')
+      pool.query(`SELECT COUNT(*) AS total, SUM(p.health="高风险") AS highRisk FROM projects p${projectFilter}`,filterParams),
+      pool.query(`SELECT COUNT(*) AS total, SUM(t.status="已完成") AS completed, SUM(t.status="进行中") AS inProgress, SUM(t.status="已延期") AS delayedCount FROM tasks t${request.user?.role==='admin'?'':' WHERE t.project_id IN (SELECT project_id FROM project_members WHERE user_id=?)'}`,filterParams),
+      pool.query(`SELECT COUNT(*) AS total, SUM(i.status<>"已关闭") AS open, SUM(i.level="高") AS highRisk FROM issues i${request.user?.role==='admin'?'':' WHERE i.project_id IN (SELECT project_id FROM project_members WHERE user_id=?)'}`,filterParams),
+      pool.query(`SELECT COUNT(*) AS total, SUM(d.status IN ("已通过","已确认")) AS approved FROM documents d${request.user?.role==='admin'?'':' WHERE d.project_id IN (SELECT project_id FROM project_members WHERE user_id=?)'}`,filterParams)
     ]);
     const projects = projectRows[0][0], tasks = taskRows[0][0], issues = issueRows[0][0], documents = documentRows[0][0];
     const report = ['# 实施项目管理平台 · 项目周报', '', `生成时间：${new Date().toLocaleString('zh-CN', { hour12: false })}`, '', '## 一、项目总体情况', `项目总数：${projects.total}`, `高风险项目：${projects.highRisk || 0}`, '', '## 二、任务进展', `任务总数：${tasks.total}`, `已完成：${tasks.completed || 0}`, `进行中：${tasks.inProgress || 0}`, `已延期：${tasks.delayedCount || 0}`, '', '## 三、问题与风险', `问题总数：${issues.total}`, `未关闭问题：${issues.open || 0}`, `高风险问题：${issues.highRisk || 0}`, '', '## 四、交付文档', `交付文档总数：${documents.total}`, `已通过审核：${documents.approved || 0}`, `待审核/待确认：${Number(documents.total) - Number(documents.approved || 0)}`].join('\n');
     response.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent('项目周报.md')}` }); response.end(report); return true;
   }
   if (request.method === 'GET' && url.pathname === '/api/dashboard') { const projects = await mysqlProjectList(pool, request.user); const [delayed] = await pool.query(request.user?.role === 'admin' ? "SELECT COUNT(DISTINCT project_id) AS total FROM tasks WHERE status='已延期'" : "SELECT COUNT(DISTINCT t.project_id) AS total FROM tasks t JOIN project_members pm ON pm.project_id=t.project_id WHERE t.status='已延期' AND pm.user_id=?", request.user?.role === 'admin' ? [] : [request.user.sub]); return json(response, 200, { total: projects.length, active: projects.filter(item => item.progress < 100).length, delayed: Number(delayed[0].total), highRisk: projects.filter(item => item.health === '高风险').length }), true; }
+  if (url.pathname === '/api/knowledge' || url.pathname.startsWith('/api/knowledge/')) {
+    const knowledgeMatch = url.pathname.match(/^\/api\/knowledge\/(\d+)(?:\/(submit|review|deposit))?$/);
+    const can = permission => hasPermission(permission);
+    if (request.method === 'GET' && url.pathname === '/api/knowledge') { if (!can('knowledge.view')) return json(response,403,{message:'无权查看知识库'}),true; const [items]=await pool.query('SELECT id,title,summary,content,category,status,source_type AS sourceType,review_comment AS reviewComment,updated_at AS updatedAt FROM knowledge_articles ORDER BY updated_at DESC'); return json(response,200,{items:items.map(item=>({...item,id:String(item.id)})),metrics:{total:items.length,published:items.filter(item=>item.status==='已发布').length,pending:items.filter(item=>item.status==='待审核').length,deposited:items.filter(item=>item.sourceType==='项目沉淀').length}}),true; }
+    if (knowledgeMatch && request.method === 'GET') { if (!can('knowledge.view')) return json(response,403,{message:'无权查看知识库'}),true; const [rows]=await pool.execute('SELECT id,title,summary,content,category,status,source_type AS sourceType,review_comment AS reviewComment FROM knowledge_articles WHERE id=?',[knowledgeMatch[1]]); return rows[0]?(json(response,200,{...rows[0],id:String(rows[0].id)}),true):(json(response,404,{message:'知识不存在'}),true); }
+    if (request.method === 'POST' && url.pathname === '/api/knowledge') { if (!can('knowledge.create')) return json(response,403,{message:'无权创建知识'}),true; const body=await readBody(request); if(!body.title||!body.category)return json(response,400,{message:'知识标题和分类不能为空'}),true; const status=body.publishNow&&can('knowledge.review')?'已发布':'草稿'; const [result]=await pool.execute('INSERT INTO knowledge_articles (title,summary,content,category,status,source_type,created_by) VALUES (?,?,?,?,?,?,?)',[body.title,body.summary||'',body.content||'',body.category,status,body.sourceType||'标准知识',request.user.sub]); return json(response,201,{id:String(result.insertId),status}),true; }
+    if (knowledgeMatch && request.method === 'PUT') { if (!can('knowledge.edit')) return json(response,403,{message:'无权编辑知识'}),true; const body=await readBody(request); const [result]=await pool.execute('UPDATE knowledge_articles SET title=?,summary=?,content=?,category=? WHERE id=?',[body.title,body.summary||'',body.content||'',body.category,knowledgeMatch[1]]); return result.affectedRows?(json(response,200,{ok:true}),true):(json(response,404,{message:'知识不存在'}),true); }
+    if (knowledgeMatch && knowledgeMatch[2] === 'submit' && request.method === 'POST') { if (!can('knowledge.edit')) return json(response,403,{message:'无权提交知识'}),true; await pool.execute('UPDATE knowledge_articles SET status="待审核" WHERE id=?',[knowledgeMatch[1]]); return json(response,200,{ok:true}),true; }
+    if (knowledgeMatch && knowledgeMatch[2] === 'review' && request.method === 'POST') { if (!can('knowledge.review')) return json(response,403,{message:'无权审核知识'}),true; const body=await readBody(request); await pool.execute('UPDATE knowledge_articles SET status=?,review_comment=? WHERE id=?',[body.approved?'已发布':'已驳回',body.comment||null,knowledgeMatch[1]]); return json(response,200,{ok:true}),true; }
+    if (knowledgeMatch && knowledgeMatch[2] === 'deposit' && request.method === 'POST') { if (!can('knowledge.create')) return json(response,403,{message:'无权沉淀知识'}),true; const body=await readBody(request); const [result]=await pool.execute('INSERT INTO knowledge_articles (title,summary,content,category,status,source_type,created_by) VALUES (?,?,?,?,?,?,?)',[body.title,body.summary||'',body.content||'',body.category||'项目案例','草稿','项目沉淀',request.user.sub]); return json(response,201,{id:String(result.insertId),status:'草稿'}),true; }
+    if (knowledgeMatch && request.method === 'DELETE') { if (!can('knowledge.delete')) return json(response,403,{message:'无权删除知识'}),true; await pool.execute('DELETE FROM knowledge_articles WHERE id=?',[knowledgeMatch[1]]); return json(response,200,{ok:true}),true; }
+  }
   return false;
 }
 function serveStatic(response, relativePath) {
@@ -605,10 +639,7 @@ http.createServer(async (request, response) => {
       try {
         request.user = verifyToken(token);
         const forwarded = request.headers['x-forwarded-for'];
-        auditContext = {
-          operator: request.user?.displayName || request.user?.name || request.user?.username || request.user?.realName || '系统',
-          ipAddress: (Array.isArray(forwarded) ? forwarded[0] : String(forwarded || '')).split(',')[0].trim() || request.socket?.remoteAddress || '-'
-        };
+        request.ipAddress = (Array.isArray(forwarded) ? forwarded[0] : String(forwarded || '')).split(',')[0].trim() || request.socket?.remoteAddress || '-';
       } catch { return json(response, 401, { message: '请先登录后再访问系统数据' }); }
     }
     if (await serveMysqlCoreApi(request, response, url)) return;

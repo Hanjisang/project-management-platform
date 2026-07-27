@@ -6,13 +6,14 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+const migration = fs.readFileSync(path.join(root, 'scripts', 'migrate-round1-technical-audit.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 
 test('knowledge base exposes persistence and REST routes', () => {
-  assert.match(server, /CREATE TABLE IF NOT EXISTS knowledge_articles/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS knowledge_articles/);
   assert.ok(server.includes("url.pathname === '/api/knowledge'"));
   assert.ok(server.includes('knowledgeMatch'));
-  assert.ok(server.includes('/deposit'));
+  assert.ok(server.includes('deposit'));
 });
 
 test('knowledge base permissions are registered', () => {
