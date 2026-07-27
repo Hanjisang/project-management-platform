@@ -1,8 +1,8 @@
 const { getPool, mysqlConfigured } = require('../db');
 
-async function migrate() {
-  if (!mysqlConfigured()) throw new Error('MYSQL_* 配置缺失，无法执行迁移');
-  const pool = getPool();
+async function migrate(injectedPool) {
+  if (!injectedPool && !mysqlConfigured()) throw new Error('MYSQL_* 配置缺失，无法执行迁移');
+  const pool = injectedPool || getPool();
   await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version VARCHAR(64) PRIMARY KEY,
     applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -32,7 +32,8 @@ async function migrate() {
     }
     await pool.execute('INSERT INTO schema_migrations (version) VALUES (?)', ['round1-technical-audit']);
   }
-  await pool.end();
+  if (!injectedPool) await pool.end();
 }
 
-migrate().catch(error => { console.error('数据库迁移失败:', error); process.exitCode = 1; });
+module.exports = { migrate };
+if (require.main === module) migrate().catch(error => { console.error('数据库迁移失败:', error); process.exitCode = 1; });
