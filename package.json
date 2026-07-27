@@ -1,0 +1,19 @@
+{
+  "name": "pis-project-delivery-center",
+  "version": "1.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/*.test.js",
+    "check": "node --check server.js",
+    "db:seed-admin": "node scripts/seed-admin.js",
+    "db:migrate-json": "node scripts/migrate-json-to-mysql.js",
+    "db:seed-sop": "node scripts/seed-default-sop.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.12.0"
+  }
+}

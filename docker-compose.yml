@@ -1,0 +1,57 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: pis_delivery
+      MYSQL_USER: pis_app
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      PORT: 3030
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: pis_delivery
+      MYSQL_USER: pis_app
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: 8h
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD}
+      DEFAULT_ADMIN_DISPLAY_NAME: ${DEFAULT_ADMIN_DISPLAY_NAME:-System Administrator}
+      DINGTALK_CLIENT_ID: ${DINGTALK_CLIENT_ID:-}
+      DINGTALK_CLIENT_SECRET: ${DINGTALK_CLIENT_SECRET:-}
+      DINGTALK_CORP_ID: ${DINGTALK_CORP_ID:-}
+      DINGTALK_REDIRECT_URI: ${DINGTALK_REDIRECT_URI:-}
+      ZENTAO_BASE_URL: ${ZENTAO_BASE_URL:-}
+      ZENTAO_TOKEN: ${ZENTAO_TOKEN:-}
+      ZENTAO_EXECUTION_ID: ${ZENTAO_EXECUTION_ID:-}
+      ZENTAO_ASSIGNED_TO: ${ZENTAO_ASSIGNED_TO:-}
+      ZENTAO_TASK_TYPE: ${ZENTAO_TASK_TYPE:-devel}
+      TZ: Asia/Shanghai
+    ports:
+      - "${APP_PORT:-3030}:3030"
+    volumes:
+      - app_uploads:/app/data/uploads
+
+volumes:
+  mysql_data:
+  app_uploads:
