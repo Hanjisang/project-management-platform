@@ -1,6 +1,18 @@
 CREATE DATABASE IF NOT EXISTS pis_delivery DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE pis_delivery;
 
+CREATE TABLE IF NOT EXISTS roles (
+  role_key VARCHAR(32) PRIMARY KEY,
+  name VARCHAR(100) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+  role_key VARCHAR(32) NOT NULL,
+  permission_code VARCHAR(100) NOT NULL,
+  PRIMARY KEY (role_key, permission_code),
+  CONSTRAINT fk_role_permissions_role FOREIGN KEY (role_key) REFERENCES roles(role_key) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   username VARCHAR(64) NOT NULL,
