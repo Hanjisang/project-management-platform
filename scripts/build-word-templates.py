@@ -565,16 +565,9 @@ def add_title_block(doc: Document, spec: dict) -> None:
     else:
         centered = layout in {"diagram-review", "acceptance", "formal-confirmation"}
         align = WD_ALIGN_PARAGRAPH.CENTER if centered else WD_ALIGN_PARAGRAPH.LEFT
-        kicker = doc.add_paragraph()
-        kicker.alignment = align
-        kicker.paragraph_format.space_before = Pt(3)
-        kicker.paragraph_format.space_after = Pt(0)
-        run = kicker.add_run(f"{LAYOUT_LABELS[layout]} · {spec['stage']}")
-        set_run_font(run, size=9.5, color=accent, bold=True)
-
         title = doc.add_paragraph()
         title.alignment = align
-        title.paragraph_format.space_before = Pt(0)
+        title.paragraph_format.space_before = Pt(3)
         title.paragraph_format.space_after = Pt(3)
         title.paragraph_format.keep_with_next = True
         run = title.add_run(spec["title"])
