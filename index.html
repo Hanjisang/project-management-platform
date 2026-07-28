@@ -5017,5 +5017,8 @@ new MutationObserver(records=>records.forEach(record=>record.addedNodes.forEach(
   if(node.nodeType===1)enhanceIconButtonLabels(node);
 }))).observe(document.body,{subtree:true,childList:true});
 </script>
+<script>
+(()=>{const clean=()=>document.querySelectorAll('#projectDeliverableRows tr').forEach(row=>{row.querySelectorAll('a[href^="/templates/"]').forEach(node=>node.remove());const buttons=[...row.querySelectorAll('button')],seen={};buttons.forEach(button=>{const key=button.getAttribute('onclick')?.replace(/\s/g,'')||button.textContent.trim();if(seen[key])button.remove();else seen[key]=true;});});clean();new MutationObserver(clean).observe(document.body,{subtree:true,childList:true});})();
+</script>
 </body>
 </html>
