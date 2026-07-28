@@ -31,6 +31,14 @@ WORD_FILENAMES = {
     "go-live-plan": "上线方案",
     "go-live-confirmation": "上线确认单",
 }
+EXCEL_TEMPLATE_SLUGS = {
+    "software-hardware-interface-list",
+    "report-template-list",
+    "pre-go-live-task-plan",
+    "interface-integration-record",
+    "end-to-end-test-record",
+    "go-live-plan",
+}
 
 # compact_reference_guide preset with named project overrides:
 # A4 landscape, 0.60/0.65-inch margins, Microsoft YaHei, and blue-white
@@ -946,7 +954,7 @@ def build_document(spec: dict) -> Path:
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    outputs = [build_document(spec) for spec in SPECS]
+    outputs = [build_document(spec) for spec in SPECS if spec["slug"] not in EXCEL_TEMPLATE_SLUGS]
     print(f"generated {len(outputs)} Word templates")
     for output in outputs:
         print(output)

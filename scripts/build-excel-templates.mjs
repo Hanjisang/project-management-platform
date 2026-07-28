@@ -10,6 +10,14 @@ const threadId = "019fa645-d466-7810-88d0-e24eb398a034";
 const outputDir = path.join(root, "outputs", threadId);
 const qaDir = path.join(outputDir, "qa-excel");
 const templateDir = path.join(root, "templates");
+const EXCEL_FILENAMES = {
+  "software-hardware-interface-list": "软硬件接口清单",
+  "report-template-list": "报告模板清单",
+  "pre-go-live-task-plan": "上线前任务计划",
+  "interface-integration-record": "接口联调记录",
+  "end-to-end-test-record": "全流程内测记录",
+  "go-live-plan": "上线方案",
+};
 
 const colors = {
   primary: "#1769E0",
@@ -623,8 +631,9 @@ async function buildWorkbook(spec) {
     await fs.writeFile(previewPath, new Uint8Array(await preview.arrayBuffer()));
   }
 
-  const outputPath = path.join(outputDir, `${spec.slug}.xlsx`);
-  const templatePath = path.join(templateDir, `${spec.slug}.xlsx`);
+  const filename = EXCEL_FILENAMES[spec.slug] || spec.slug;
+  const outputPath = path.join(outputDir, `${filename}.xlsx`);
+  const templatePath = path.join(templateDir, `${filename}.xlsx`);
   const xlsx = await SpreadsheetFile.exportXlsx(workbook);
   await xlsx.save(outputPath);
   await persistFreezePanes(outputPath);
