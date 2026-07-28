@@ -2,6 +2,8 @@
 
 完整架构、业务设计和当前开发状态请参阅：[项目完整设计与开发状态](docs/PROJECT-DESIGN-AND-STATUS.md)。
 
+Ubuntu 服务器推荐部署目录为 `/opt/project-management-platform`，完整部署步骤请参阅：[Ubuntu 部署手册](docs/UBUNTU-DEPLOYMENT.md)。
+
 当前版本为可本地运行、可容器化部署的实施项目管理系统，基于 V1.1 产品设计与 V3 钉钉消息采集版原型。
 
 ## 已覆盖的核心路径
