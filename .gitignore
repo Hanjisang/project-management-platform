@@ -3,3 +3,4 @@ node_modules/
 data/
 .codex-askpass.exe
 .codex-askpass*
+outputs/
