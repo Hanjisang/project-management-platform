@@ -29,6 +29,15 @@ test('SOP templates have a restricted download route and one canonical download 
   assert.ok(!html.includes('下载 Excel'));
   assert.ok(!html.includes('previewSopDeliverableTemplate'));
 });
+test('SOP deliverable templates use independent cards with editable task matching and file actions', () => {
+  assert.ok(html.includes('openSopDeliverableEditor'));
+  assert.ok(html.includes('saveSopDeliverableEditor'));
+  assert.ok(html.includes('匹配任务 *'));
+  assert.ok(html.includes('replace') || html.includes('替换模板'));
+  assert.ok(html.includes('请先上传模板'));
+  assert.ok(html.includes('data-sop-card-id'));
+  assert.ok(html.includes('SOP_DELIVERABLE_STATE_KEY'));
+});
 test('project basic editing and safe deletion are exposed', () => {
   assert.ok(server.includes('project.delete')); assert.ok(server.includes("method === 'PUT'"));
   assert.ok(html.includes('openProjectBasicEditor()')); assert.ok(html.includes('deleteCurrentProject()'));
