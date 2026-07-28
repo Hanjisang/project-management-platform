@@ -4948,7 +4948,7 @@ function renderSopDeliverableTemplateLibrary(){const target=document.getElementB
 const SOP_DELIVERABLE_STATE_KEY='pis-sop-deliverable-template-cards-v2';
 function sopDeliverableCards(){
   let cards=[];try{cards=JSON.parse(localStorage.getItem(SOP_DELIVERABLE_STATE_KEY)||'null')||[]}catch(error){}
-  if(!cards.length){cards=sopDeliverableTemplates.map(([,name,file,extension])=>({id:'standard-'+file,name,file,extension,matchTask:name,fileName:'',dataUrl:'',updatedAt:'',updatedBy:''}));localStorage.setItem(SOP_DELIVERABLE_STATE_KEY,JSON.stringify(cards));}
+  if(!cards.length){cards=sopDeliverableTemplates.map(([,name,file,extension])=>({id:'standard-'+file,name,file,extension,matchTask:name,fileName:`${templateDownloadFile(file,extension)}.${extension}`,dataUrl:'',updatedAt:'系统预置',updatedBy:'系统'}));localStorage.setItem(SOP_DELIVERABLE_STATE_KEY,JSON.stringify(cards));}
   return cards;
 }
 function sopTaskOptions(selected){
@@ -4976,8 +4976,26 @@ function saveSopDeliverableEditor(){
   const persist=(fileData={})=>{const next={...(existing||{id,extension:'docx',fileName:'',dataUrl:'',updatedAt:'',updatedBy:''}),name,matchTask,...fileData};if(!existing)cards.unshift(next);else Object.assign(existing,next);localStorage.setItem(SOP_DELIVERABLE_STATE_KEY,JSON.stringify(cards));closeDrawer();renderSopDeliverableTemplateLibrary();toast('SOP模板已保存');};
   const file=input?.files?.[0];if(file){const reader=new FileReader();reader.onload=()=>persist({fileName:file.name,dataUrl:reader.result,extension:(file.name.split('.').pop()||'docx').toLowerCase(),updatedAt:new Date().toLocaleString('zh-CN',{hour12:false}),updatedBy:(typeof currentUser!=='undefined'&&currentUser?.displayName)||'当前用户'});reader.readAsDataURL(file);}else persist();
 }
-function uploadSopDeliverableTemplate(id){const card=sopDeliverableCards().find(item=>item.id===id);if(!card)return;const input=document.createElement('input');input.type='file';input.accept='.doc,.docx,.xls,.xlsx,.pdf';input.onchange=()=>{const file=input.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{card.fileName=file.name;card.dataUrl=reader.result;card.extension=(file.name.split('.').pop()||'docx').toLowerCase();card.updatedAt=new Date().toLocaleString('zh-CN',{hour12:false});card.updatedBy=(typeof currentUser!=='undefined'&&currentUser?.displayName)||'当前用户';localStorage.setItem(SOP_DELIVERABLE_STATE_KEY,JSON.stringify(sopDeliverableCards()));renderSopDeliverableTemplateLibrary();toast(card.fileName?'模板已替换':'模板已上传');};reader.readAsDataURL(file);};input.click();}
-function downloadSopDeliverableTemplate(id){const card=sopDeliverableCards().find(item=>item.id===id);if(!card?.dataUrl){toast('请先上传模板');return;}const link=document.createElement('a');link.href=card.dataUrl;link.download=card.fileName||card.name;link.click();}
+function uploadSopDeliverableTemplate(id){
+  const card=sopDeliverableCards().find(item=>item.id===id);
+  if(!card){toast('未找到当前模板卡片');return;}
+  const input=document.createElement('input');input.type='file';input.accept='.doc,.docx,.xls,.xlsx,.pdf';input.style.display='none';document.body.appendChild(input);
+  const cleanup=()=>input.remove();
+  input.onchange=()=>{
+    const file=input.files?.[0];if(!file){cleanup();return;}
+    const wasUploaded=Boolean(card.dataUrl);
+    const reader=new FileReader();
+    reader.onerror=()=>{cleanup();toast('模板文件读取失败，请重试');};
+    reader.onload=()=>{try{
+      card.fileName=file.name;card.dataUrl=reader.result;card.extension=(file.name.split('.').pop()||'docx').toLowerCase();card.updatedAt=new Date().toLocaleString('zh-CN',{hour12:false});card.updatedBy=(typeof currentUser!=='undefined'&&currentUser?.displayName)||'当前用户';
+      const cards=sopDeliverableCards(),index=cards.findIndex(item=>item.id===id);if(index>=0)cards[index]=card;
+      localStorage.setItem(SOP_DELIVERABLE_STATE_KEY,JSON.stringify(cards));renderSopDeliverableTemplateLibrary();cleanup();toast(wasUploaded?'模板已替换':'模板已上传');
+    }catch(error){cleanup();toast('模板保存失败，请重试');console.error(error);}};
+    reader.readAsDataURL(file);
+  };
+  input.click();
+}
+function downloadSopDeliverableTemplate(id){const card=sopDeliverableCards().find(item=>item.id===id);if(!card?.fileName){toast('请先上传模板');return;}const link=document.createElement('a');link.href=card.dataUrl||('/templates/'+encodeURIComponent(card.fileName));link.download=card.fileName||card.name;link.click();}
 // 交付物模板按钮由模板卡片统一渲染，避免 MutationObserver 重复追加按钮。
 function renderDeliverableTemplateMatches(){document.querySelectorAll('#projectDeliverableRows tr[data-plan-task-id]').forEach(row=>{if(row.dataset.templateMatchReady)return;const text=row.cells?.[2]?.textContent?.trim(),item=projectDeliverableItems().find(entry=>String(entry.task.id)===String(row.dataset.planTaskId)&&entry.deliverable===text);if(!item)return;const binding=item.task.deliverableTemplates?.[text],matched=matchedDeliverableTemplate(text),file=binding||matched?.file;if(!file)return;const label=sopDeliverableTemplates.find(entry=>entry[2]===file)?.[1]||text,cell=row.cells?.[2];if(!cell)return;const badge=document.createElement('div');badge.className='deliverable-template-match';badge.innerHTML=`<span class="tag green">已匹配模板</span><small>${escapeHtml(label)} · ${binding?'手动选择':'SOP 自动匹配'}</small>`;cell.appendChild(badge);row.dataset.templateMatchReady='1';});}
 renderDeliverableTemplateMatches();new MutationObserver(renderDeliverableTemplateMatches).observe(document.body,{subtree:true,childList:true});
