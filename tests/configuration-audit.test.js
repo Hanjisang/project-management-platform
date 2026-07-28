@@ -17,12 +17,17 @@ test('issue type and level catalogs are fixed on the server', () => {
   assert.ok(server.includes('validateIssuePayload'));
 });
 test('health endpoint is available for deployment checks', () => assert.ok(server.includes("url.pathname === '/api/health'")));
-test('SOP Word and Excel templates have a restricted download route', () => {
+test('SOP templates have a restricted download route and one canonical download action', () => {
   assert.ok(server.includes('serveDeliverableTemplate'));
   assert.match(server, /\^\\\/templates\\\/\(\[a-z0-9-\]\+\\\.\(docx\|xlsx\)\)\$\//);
   assert.ok(server.includes('application/vnd.openxmlformats-officedocument.wordprocessingml.document'));
   assert.ok(server.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
-  assert.ok(html.includes('下载 Excel'));
+  assert.ok(html.includes('下载模板'));
+  assert.ok(html.includes("'software-hardware-interface-list','xlsx'"));
+  assert.ok(html.includes("'go-live-confirmation','docx'"));
+  assert.ok(!html.includes('下载 Word'));
+  assert.ok(!html.includes('下载 Excel'));
+  assert.ok(!html.includes('previewSopDeliverableTemplate'));
 });
 test('project basic editing and safe deletion are exposed', () => {
   assert.ok(server.includes('project.delete')); assert.ok(server.includes("method === 'PUT'"));
