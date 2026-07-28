@@ -11,6 +11,7 @@ const { validateStructuredMessageResult } = require('./message-result');
 
 const root = __dirname;
 const dataDirectory = path.join(root, 'data');
+const templateDirectory = path.join(root, 'templates');
 const documentFile = path.join(dataDirectory, 'documents.json');
 const projectFile = path.join(dataDirectory, 'projects.json');
 const taskFile = path.join(dataDirectory, 'tasks.json');
@@ -544,6 +545,24 @@ function serveStatic(response, relativePath) {
   return true;
 }
 
+function serveDeliverableTemplate(response, pathname) {
+  const match = pathname.match(/^\/templates\/([a-z0-9-]+\.(docx|xlsx))$/);
+  if (!match) return false;
+  const target = path.join(templateDirectory, match[1]);
+  if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return false;
+  const contentType = match[2] === 'docx'
+    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  response.writeHead(200, {
+    'Content-Type': contentType,
+    'Content-Length': fs.statSync(target).size,
+    'Content-Disposition': `attachment; filename="${match[1]}"`,
+    'Cache-Control': 'public, max-age=300'
+  });
+  fs.createReadStream(target).pipe(response);
+  return true;
+}
+
 const port = Number(process.env.PORT || 3030);
 async function validateDatabaseSchema() {
   if (!mysqlConfigured()) throw new Error('系统业务功能需要配置 MySQL');
@@ -741,6 +760,7 @@ async function startServer() {
         response.writeHead(200, { 'Content-Type': mime, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(document.name)}` }); return response.end(Buffer.from(encoded, 'base64'));
       }
     }
+    if (request.method === 'GET' && serveDeliverableTemplate(response, url.pathname)) return;
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) return serveStatic(response, 'index.html');
     json(response, 404, { message: '接口不存在' });
   } catch (error) { json(response, 500, { message: error.message || '服务器错误' }); }
