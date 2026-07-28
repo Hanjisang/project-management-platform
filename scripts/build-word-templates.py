@@ -15,6 +15,23 @@ from docx.shared import Inches, Pt, RGBColor
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "templates"
 
+WORD_FILENAMES = {
+    "software-hardware-interface-list": "软硬件接口清单",
+    "report-template-list": "报告模板清单",
+    "pre-go-live-task-plan": "上线前任务计划",
+    "environment-deployment-record": "环境部署记录",
+    "initial-configuration-record": "初始化配置记录",
+    "interface-document-confirmation": "接口文档确认记录",
+    "sequence-diagram-review": "时序图（评审确认版）",
+    "interface-integration-record": "接口联调记录",
+    "interface-acceptance-form": "接口对接确认表",
+    "end-to-end-test-record": "全流程内测记录",
+    "training-record": "培训记录",
+    "trial-test-record": "试行测试记录",
+    "go-live-plan": "上线方案",
+    "go-live-confirmation": "上线确认单",
+}
+
 # compact_reference_guide preset with named project overrides:
 # A4 landscape, 0.60/0.65-inch margins, Microsoft YaHei, and blue-white
 # healthcare implementation colors.
@@ -922,7 +939,7 @@ def build_document(spec: dict) -> Path:
     add_signoff(doc, "六" if spec.get("diagram_box") else "五", spec)
     add_revision_log(doc, spec)
 
-    output = OUTPUT_DIR / f"{spec['slug']}.docx"
+    output = OUTPUT_DIR / f"{WORD_FILENAMES.get(spec['slug'], spec['slug'])}.docx"
     doc.save(output)
     return output
 
