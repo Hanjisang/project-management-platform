@@ -1,7 +1,7 @@
 # 实施项目管理平台：完整设计与开发状态
 
-> 文档基线：2026-07-28  
-> 当前开发分支：`fix/round1-technical-audit`  
+> 文档基线：2026-07-28
+> 当前开发分支：`fix/round1-technical-audit`
 > 系统版本：`1.1.0`
 
 ## 1. 产品定位
@@ -253,4 +253,3 @@ Node.js 原生 HTTP 服务 server.js
 - `storage.js`：文件存储适配。
 - `Dockerfile` / `docker-compose.yml`：容器部署。
 - `tests/`：自动化测试。
-
