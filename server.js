@@ -546,9 +546,12 @@ function serveStatic(response, relativePath) {
 }
 
 function serveDeliverableTemplate(response, pathname) {
-  const match = pathname.match(/^\/templates\/([a-z0-9-]+\.(docx|xlsx))$/);
+  const match = pathname.match(/^\/templates\/([^/]+\.(docx|xlsx))$/);
   if (!match) return false;
-  const target = path.join(templateDirectory, match[1]);
+  let fileName;
+  try { fileName = decodeURIComponent(match[1]); } catch { return false; }
+  if (!fileName || fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) return false;
+  const target = path.join(templateDirectory, fileName);
   if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return false;
   const contentType = match[2] === 'docx'
     ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -556,7 +559,7 @@ function serveDeliverableTemplate(response, pathname) {
   response.writeHead(200, {
     'Content-Type': contentType,
     'Content-Length': fs.statSync(target).size,
-    'Content-Disposition': `attachment; filename="${match[1]}"`,
+    'Content-Disposition': `attachment; filename="${fileName}"`,
     'Cache-Control': 'public, max-age=300'
   });
   fs.createReadStream(target).pipe(response);

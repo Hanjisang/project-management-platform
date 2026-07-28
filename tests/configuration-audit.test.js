@@ -19,7 +19,7 @@ test('issue type and level catalogs are fixed on the server', () => {
 test('health endpoint is available for deployment checks', () => assert.ok(server.includes("url.pathname === '/api/health'")));
 test('SOP templates have a restricted download route and one canonical download action', () => {
   assert.ok(server.includes('serveDeliverableTemplate'));
-  assert.match(server, /\^\\\/templates\\\/\(\[a-z0-9-\]\+\\\.\(docx\|xlsx\)\)\$\//);
+  assert.ok(server.includes("pathname.match(/^\\/templates\\/([^/]+\\.(docx|xlsx))$/)"));
   assert.ok(server.includes('application/vnd.openxmlformats-officedocument.wordprocessingml.document'));
   assert.ok(server.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
   assert.ok(html.includes('下载模板'));
