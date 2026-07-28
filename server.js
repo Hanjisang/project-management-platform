@@ -559,7 +559,7 @@ function serveDeliverableTemplate(response, pathname) {
   response.writeHead(200, {
     'Content-Type': contentType,
     'Content-Length': fs.statSync(target).size,
-    'Content-Disposition': `attachment; filename="${fileName}"`,
+    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
     'Cache-Control': 'public, max-age=300'
   });
   fs.createReadStream(target).pipe(response);
