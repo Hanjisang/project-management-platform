@@ -38,6 +38,11 @@ test('SOP deliverable templates use independent cards with editable task matchin
   assert.ok(html.includes('data-sop-card-id'));
   assert.ok(html.includes('SOP_DELIVERABLE_STATE_KEY'));
 });
+test('SOP deliverable template cards do not depend on implementation stages', () => {
+  assert.ok(!html.includes('id="sopDeliverableTemplateStage"'));
+  assert.ok(html.includes('搜索模板名称、匹配任务或文件名'));
+  assert.ok(html.includes('匹配任务'));
+});
 test('project basic editing and safe deletion are exposed', () => {
   assert.ok(server.includes('project.delete')); assert.ok(server.includes("method === 'PUT'"));
   assert.ok(html.includes('openProjectBasicEditor()')); assert.ok(html.includes('deleteCurrentProject()'));
