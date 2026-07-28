@@ -1,7 +1,7 @@
 # Ubuntu 服务器部署路径与操作手册
 
-> 适用系统：Ubuntu Server 22.04 LTS / 24.04 LTS  
-> 推荐部署方式：Docker Compose  
+> 适用系统：Ubuntu Server 22.04 LTS / 24.04 LTS
+> 推荐部署方式：Docker Compose
 > GitHub 仓库：`https://github.com/Hanjisang/project-management-platform.git`
 
 ## 1. 服务器路径约定
@@ -264,4 +264,3 @@ free -h
 - [ ] 消息确认事务、幂等和权限已在真实 MySQL 验证。
 - [ ] Nginx HTTPS 和安全 Cookie 已启用。
 - [ ] 数据库与上传文件备份已执行并验证可恢复。
-
