@@ -449,8 +449,42 @@ async function serveMysqlCoreApi(request, response, url) {
     const plan=await backfillPlanTaskLinks(pool,projectPlanMatch[1],parseJsonColumn(rows[0].plan_json));await pool.execute('UPDATE project_plans SET plan_json=? WHERE project_id=?',[JSON.stringify(plan),projectPlanMatch[1]]);return json(response,200,plan),true;
   }
   const memberMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/members$/);
-  if (memberMatch && request.method === 'GET') { if (request.user?.role !== 'admin') return json(response, 403, { message: '仅管理员可以查看项目成员' }), true; const [rows] = await pool.execute('SELECT u.id,u.username,u.display_name AS displayName,u.role,pm.role AS projectRole FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=? ORDER BY u.id', [memberMatch[1]]); return json(response, 200, rows.map(row => ({ ...row, id: String(row.id) }))), true; }
-  if (memberMatch && request.method === 'PUT') { if (request.user?.role !== 'admin') return json(response, 403, { message: '仅管理员可以分配项目成员' }), true; const body = await readBody(request); if (!Array.isArray(body.members)) return json(response, 400, { message: '成员列表格式不正确' }), true; const connection = await pool.getConnection(); try { await connection.beginTransaction(); await connection.execute('DELETE FROM project_members WHERE project_id=?', [memberMatch[1]]); for (const member of body.members) await connection.execute('INSERT INTO project_members (project_id,user_id,role) VALUES (?,?,?)', [memberMatch[1], member.userId, member.role || 'member']); const manager = body.members.find(member => member.role === 'manager'); if (manager) { const [users] = await connection.execute('SELECT id,display_name FROM users WHERE id=?', [manager.userId]); if (users[0]) await connection.execute('UPDATE projects SET manager_id=?,manager_name=? WHERE id=?', [users[0].id, users[0].display_name, memberMatch[1]]); } await connection.commit(); audit('更新项目成员', 'project', memberMatch[1], `${body.members.length} 人`); return json(response, 200, { ok: true }), true; } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); } }
+  if (memberMatch && request.method === 'GET') {
+    if (request.user?.role !== 'admin') return json(response, 403, { message: '仅管理员可以查看项目成员' }), true;
+    const [projects] = await pool.execute('SELECT id,manager_id AS managerId,DATE_FORMAT(planned_go_live,"%Y-%m-%d") AS plannedGoLive FROM projects WHERE id=?', [memberMatch[1]]);
+    if (!projects[0]) return json(response, 404, { message: '项目不存在' }), true;
+    const [members] = await pool.execute('SELECT u.id,u.username,u.display_name AS displayName,u.role,pm.role AS projectRole FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=? ORDER BY u.display_name,u.id', [memberMatch[1]]);
+    const [candidates] = await pool.query('SELECT id,username,display_name AS displayName,role FROM users WHERE status="active" ORDER BY display_name,id');
+    return json(response, 200, {
+      project: { ...projects[0], id: String(projects[0].id), managerId: projects[0].managerId == null ? '' : String(projects[0].managerId) },
+      members: members.map(row => ({ ...row, id: String(row.id) })),
+      candidates: candidates.map(row => ({ ...row, id: String(row.id) }))
+    }), true;
+  }
+  if (memberMatch && request.method === 'PUT') {
+    if (request.user?.role !== 'admin') return json(response, 403, { message: '仅管理员可以分配项目成员' }), true;
+    const body = await readBody(request);
+    if (!body.managerUserId || !Array.isArray(body.members)) return json(response, 400, { message: '请选择项目经理并提交成员列表' }), true;
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [projects] = await connection.execute('SELECT id FROM projects WHERE id=? FOR UPDATE', [memberMatch[1]]);
+      if (!projects[0]) { await connection.rollback(); return json(response, 404, { message: '项目不存在' }), true; }
+      const [users] = await connection.execute('SELECT id,display_name FROM users WHERE id=? AND status="active" LIMIT 1', [body.managerUserId]);
+      if (!users[0]) { await connection.rollback(); return json(response, 400, { message: '请选择有效的项目经理账号' }), true; }
+      const memberIds = [...new Set(body.members.map(member => String(member.userId || '')).filter(Boolean))];
+      if (!memberIds.includes(String(users[0].id))) memberIds.push(String(users[0].id));
+      await connection.execute('DELETE FROM project_members WHERE project_id=?', [memberMatch[1]]);
+      for (const userId of memberIds) await connection.execute('INSERT INTO project_members (project_id,user_id,role) VALUES (?,?,?)', [memberMatch[1], userId, String(userId) === String(users[0].id) ? 'manager' : 'member']);
+      await connection.execute('UPDATE projects SET manager_id=?,manager_name=? WHERE id=?', [users[0].id, users[0].display_name, memberMatch[1]]);
+      await connection.commit();
+      audit('更新项目成员', 'project', memberMatch[1], `${memberIds.length} 人`);
+      return json(response, 200, { ok: true, managerId: String(users[0].id), managerName: users[0].display_name }), true;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally { connection.release(); }
+  }
   const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
   if (projectMatch && request.method === 'GET') { const projects = await mysqlProjectList(pool, request.user); const project = projects.find(item => item.id === projectMatch[1]); return project ? (json(response, 200, project), true) : (json(response, 404, { message: '项目不存在' }), true); }
   if (request.method === 'GET' && url.pathname === '/api/tasks') {
