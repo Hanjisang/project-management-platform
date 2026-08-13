@@ -7,6 +7,7 @@
     "test": "node --test tests/*.test.js",
     "check": "node --check server.js",
     "db:migrate-round1": "node scripts/migrate-round1-technical-audit.js",
+    "db:migrate-hardening": "node scripts/migrate-overnight-hardening.js",
     "db:seed-admin": "node scripts/seed-admin.js",
     "db:migrate-json": "node scripts/migrate-json-to-mysql.js",
     "db:seed-sop": "node scripts/seed-default-sop.js"

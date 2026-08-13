@@ -6,8 +6,11 @@ const { URL } = require('node:url');
 const { authReady, passwordLogin, verifyToken } = require('./auth');
 const { getPool, mysqlConfigured } = require('./db');
 const { saveDataUrl, readObject, deleteObject } = require('./storage');
-const { loadUserPermissions, requirePermission } = require('./permissions');
+const { loadUserPermissions, requirePermission, CORE_PERMISSIONS } = require('./permissions');
 const { validateStructuredMessageResult } = require('./message-result');
+const { apiPermissionForRequest, sameOriginWriteAllowed, LoginThrottle } = require('./security');
+// Kept as a named server-side reference for deployment audits and permission reviews.
+const PROJECT_DELETE_PERMISSION = 'project.delete';
 
 const root = __dirname;
 const dataDirectory = path.join(root, 'data');
@@ -46,7 +49,7 @@ const initialIssues = [
 ];
 const issueTypes = ['客户需求', '产品缺陷', '代码缺陷', '接口缺陷', '项目风险', '配置问题'];
 const issueLevels = ['高', '中', '低'];
-const permissionCodes = ['project.delete', 'knowledge.view', 'knowledge.create', 'knowledge.edit', 'knowledge.review', 'knowledge.delete'];
+const permissionCodes = [...CORE_PERMISSIONS, 'knowledge.view', 'knowledge.create', 'knowledge.edit', 'knowledge.review', 'knowledge.delete'];
 function validateIssuePayload(body) { return issueTypes.includes(body.type || '其他问题') && issueLevels.includes(body.level || '中'); }
 
 function readDocuments() {
@@ -168,11 +171,11 @@ function readAuditLogs() { return fs.existsSync(auditFile) ? JSON.parse(fs.readF
 async function writeAudit(action, targetType, targetId, detail, user, ipAddress) {
   const operator = user?.displayName || user?.name || user?.username || user?.realName || '系统';
   detail = `[用户:${operator}][IP:${ipAddress || '-'}] ${detail || ''}`;
-  const entry = { id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, action, targetType, targetId, detail, operator, time: new Date().toLocaleString('zh-CN', { hour12: false }) };
-  const logs = readAuditLogs(); logs.unshift(entry); fs.writeFileSync(auditFile, JSON.stringify(logs.slice(0, 500), null, 2), 'utf8');
   if (mysqlConfigured()) {
     try { await getPool().execute('INSERT INTO audit_logs (action, target_type, target_id, detail, operator_id) VALUES (?, ?, ?, ?, ?)', [action, targetType, String(targetId), detail || null, user?.sub || null]); }
     catch (error) { console.error('审计日志写入数据库失败', { action, targetType, targetId, error: error.message }); }
+  } else {
+    console.warn('审计日志未持久化：MySQL 未配置', { action, targetType, targetId });
   }
 }
 const audit = writeAudit;
@@ -188,7 +191,14 @@ function projectViews() {
   });
 }
 function json(response, status, body) {
-  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  response.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'same-origin',
+    'Content-Security-Policy': "default-src 'self'; base-uri 'self'; frame-ancestors 'none'"
+  });
   response.end(JSON.stringify(body));
 }
 function readCookie(request, name) {
@@ -199,8 +209,9 @@ function readCookie(request, name) {
 function readBody(request) {
   return new Promise((resolve, reject) => {
     let body = '';
-    request.on('data', chunk => { body += chunk; if (body.length > 15 * 1024 * 1024) request.destroy(); });
-    request.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error('请求数据格式不正确')); } });
+    let tooLarge = Number(request.headers['content-length'] || 0) > 15 * 1024 * 1024;
+    request.on('data', chunk => { if (tooLarge) return; body += chunk; if (body.length > 15 * 1024 * 1024) tooLarge = true; });
+    request.on('end', () => { if (tooLarge) { const error = new Error('请求内容超过 15 MB 限制'); error.statusCode = 413; return reject(error); } try { resolve(body ? JSON.parse(body) : {}); } catch { const error = new Error('请求数据格式不正确'); error.statusCode = 400; reject(error); } });
     request.on('error', reject);
   });
 }
@@ -270,7 +281,7 @@ async function createZentaoTask(task) {
 function mysqlProject(row) {
   const health = Number(row.highRiskIssues) > 0 ? '高风险' : row.health;
   const startedAt=row.startedAt||row.started_at,pausedAt=row.pause_started_at,plannedGoLive=row.plannedGoLive||row.planned_go_live; const elapsed=startedAt?Math.max(0,Math.ceil(((pausedAt?new Date(pausedAt):new Date()).getTime()-new Date(startedAt).getTime())/86400000)):0; const runningDays=Math.max(0,elapsed-Number(row.paused_days||0));
-  return { id: String(row.id), name: row.name, customer: row.customer, manager: row.manager_name, stage: row.stage, stageClass: stageClass(row.stage), progress: Number(row.progress), openIssues: Number(row.openIssues), plannedGoLive: plannedGoLive ? new Date(plannedGoLive).toISOString().slice(0, 10) : '', health, healthClass: healthClass(health), executionStatus:row.execution_status||'未启动', startedAt:startedAt?new Date(startedAt).toISOString():'', runningDays };
+  return { id: String(row.id), name: row.name, customer: row.customer, manager: row.manager_name, stage: row.stage, stageClass: stageClass(row.stage), progress: Number(row.progress), openIssues: Number(row.openIssues), plannedGoLive: plannedGoLive ? new Date(plannedGoLive).toISOString().slice(0, 10) : '', health, healthClass: healthClass(health), executionStatus:row.execution_status||'未启动', startedAt:startedAt?new Date(startedAt).toISOString():'', runningDays, remoteMethod:row.remote_method||row.remoteMethod||'', serverInfo:row.server_info||row.serverInfo||'', customerInfo:row.customer_info||row.customerInfo||'', estimatedGoLive:row.estimatedGoLive||'', remainingWorkdays:Number(row.remainingWorkdays||0), forecastVarianceDays:Number(row.forecastVarianceDays||0), forecastStatus:row.forecastStatus||'待计算' };
 }
 async function mysqlProjectList(pool, user) {
   const restricted = user && user.role !== 'admin';
@@ -293,9 +304,11 @@ async function serveMysqlCoreApi(request, response, url) {
   if (!mysqlConfigured()) return false;
   const pool = getPool();
   const audit = (...args) => writeAudit(...args, request.user, request.ipAddress);
-  const allowedRoles = ['admin', 'project_manager', 'project_member', 'developer', 'viewer'];
+  const roleExists = async role => { const [rows] = await pool.execute('SELECT 1 FROM roles WHERE role_key=? AND status="active" LIMIT 1', [role]); return Boolean(rows[0]); };
    // Schema changes are managed by scripts/migrate-round1-technical-audit.js.
   const hasPermission = (permission) => requirePermission(request.user, permission);
+  const requiredPermission = apiPermissionForRequest(request.method, url.pathname);
+  if (requiredPermission && requireWriteAccess(response, request.user, requiredPermission)) return true;
   if (request.method === 'GET' && url.pathname === '/api/project-user-options') {
     if (!hasPermission('project.create')) return json(response, 403, { message: '无权创建项目' }), true;
     const [rows] = await pool.query('SELECT u.id,u.username,u.display_name AS displayName,u.role,r.name AS roleName FROM users u LEFT JOIN roles r ON r.role_key=u.role WHERE u.status="active" ORDER BY u.display_name,u.id');
@@ -341,7 +354,37 @@ async function serveMysqlCoreApi(request, response, url) {
     if (request.method === 'POST') { if (request.user?.role !== 'admin') return json(response,403,{message:'仅管理员可以维护报表模板'}),true; const body=await readBody(request); if(!body.name||!body.reportType||!Array.isArray(body.fields)) return json(response,400,{message:'请填写模板名称、报表类型和展示字段'}),true; const [result]=await pool.execute('INSERT INTO report_templates (name,report_type,description,fields_json,status) VALUES (?,?,?,?,?)',[body.name.trim(),body.reportType,body.description||'',JSON.stringify(body.fields),body.status||'已启用']); audit('创建报表模板','report_template',String(result.insertId),body.name.trim()); return json(response,201,{id:String(result.insertId)}),true; }
   }
   const reportTemplateMatch=url.pathname.match(/^\/api\/report-templates\/(\d+)$/);
-  if(reportTemplateMatch){ if(request.method==='PUT'){ if(request.user?.role!=='admin')return json(response,403,{message:'仅管理员可以维护报表模板'}),true; const body=await readBody(request);if(!body.name||!body.reportType||!Array.isArray(body.fields))return json(response,400,{message:'请填写完整模板信息'}),true; const [result]=await pool.execute('UPDATE report_templates SET name=?,report_type=?,description=?,fields_json=?,status=? WHERE id=?',[body.name.trim(),body.reportType,body.description||'',JSON.stringify(body.fields),body.status||'已启用',reportTemplateMatch[1]]);if(!result.affectedRows)return json(response,404,{message:'模板不存在'}),true;audit('更新报表模板','report_template',reportTemplateMatch[1],body.name.trim());return json(response,200,{ok:true}),true;} if(request.method==='GET'){const [rows]=await pool.execute('SELECT id,name,report_type AS reportType,description,fields_json AS fields,status FROM report_templates WHERE id=?',[reportTemplateMatch[1]]);return rows[0]?(json(response,200,{...rows[0],id:String(rows[0].id),fields:parseJsonColumn(rows[0].fields)}),true):(json(response,404,{message:'模板不存在'}),true);} }
+  if(reportTemplateMatch){ if(request.method==='PUT'){ if(request.user?.role!=='admin')return json(response,403,{message:'仅管理员可以维护报表模板'}),true; const body=await readBody(request);if(!body.name||!body.reportType||!Array.isArray(body.fields))return json(response,400,{message:'请填写完整模板信息'}),true; const [result]=await pool.execute('UPDATE report_templates SET name=?,report_type=?,description=?,fields_json=?,status=? WHERE id=?',[body.name.trim(),body.reportType,body.description||'',JSON.stringify(body.fields),body.status||'已启用',reportTemplateMatch[1]]);if(!result.affectedRows)return json(response,404,{message:'模板不存在'}),true;audit('更新报表模板','report_template',reportTemplateMatch[1],body.name.trim());return json(response,200,{ok:true}),true;} if(request.method==='DELETE'){if(request.user?.role!=='admin')return json(response,403,{message:'仅管理员可以维护报表模板'}),true;const [result]=await pool.execute('DELETE FROM report_templates WHERE id=?',[reportTemplateMatch[1]]);if(!result.affectedRows)return json(response,404,{message:'模板不存在'}),true;audit('删除报表模板','report_template',reportTemplateMatch[1],'');return json(response,200,{ok:true}),true;} if(request.method==='GET'){const [rows]=await pool.execute('SELECT id,name,report_type AS reportType,description,fields_json AS fields,status FROM report_templates WHERE id=?',[reportTemplateMatch[1]]);return rows[0]?(json(response,200,{...rows[0],id:String(rows[0].id),fields:parseJsonColumn(rows[0].fields)}),true):(json(response,404,{message:'模板不存在'}),true);} }
+  if (url.pathname === '/api/roles') {
+    if (request.user?.role !== 'admin') return deny(response, '仅管理员可以管理角色'), true;
+    if (request.method === 'GET') {
+      const [roles] = await pool.query('SELECT r.role_key AS roleKey,r.name,r.description,r.status,DATE_FORMAT(r.updated_at,"%Y-%m-%d %H:%i:%s") AS updatedAt,COUNT(DISTINCT u.id) AS userCount FROM roles r LEFT JOIN users u ON u.role=r.role_key GROUP BY r.role_key,r.name,r.description,r.status,r.updated_at ORDER BY r.role_key');
+      const [permissions] = await pool.query('SELECT role_key,permission_code FROM role_permissions ORDER BY permission_code');
+      const byRole = new Map(); for (const item of permissions) { if (!byRole.has(item.role_key)) byRole.set(item.role_key, []); byRole.get(item.role_key).push(item.permission_code); }
+      return json(response, 200, roles.map(role => ({ ...role, userCount: Number(role.userCount), permissions: role.roleKey === 'admin' ? ['*'] : byRole.get(role.roleKey) || [] }))), true;
+    }
+    if (request.method === 'POST') {
+      const body = await readBody(request), roleKey = String(body.roleKey || '').trim();
+      if (!/^[a-z][a-z0-9_]{2,63}$/.test(roleKey) || !String(body.name || '').trim()) return json(response, 400, { message: '角色编码或名称格式不正确' }), true;
+      try { await pool.execute('INSERT INTO roles (role_key,name,description,status) VALUES (?,?,?,?)', [roleKey, String(body.name).trim(), body.description || '', body.status === 'disabled' ? 'disabled' : 'active']); for (const permission of [...new Set(body.permissions || [])]) await pool.execute('INSERT IGNORE INTO role_permissions (role_key,permission_code) VALUES (?,?)', [roleKey, permission]); } catch (error) { if (error.code === 'ER_DUP_ENTRY') return json(response, 409, { message: '角色编码已存在' }), true; throw error; }
+      audit('创建角色', 'role', roleKey, body.name); return json(response, 201, { roleKey }), true;
+    }
+  }
+  const rolePermissionMatch = url.pathname.match(/^\/api\/roles\/([a-zA-Z0-9_]+)\/permissions$/);
+  if (rolePermissionMatch && request.method === 'PUT') {
+    if (request.user?.role !== 'admin') return deny(response, '仅管理员可以配置权限'), true;
+    if (rolePermissionMatch[1] === 'admin') return json(response, 400, { message: '管理员始终拥有全部权限' }), true;
+    const body = await readBody(request); if (!Array.isArray(body.permissions)) return json(response, 400, { message: '权限列表格式不正确' }), true;
+    const connection = await pool.getConnection(); try { await connection.beginTransaction(); await connection.execute('DELETE FROM role_permissions WHERE role_key=?', [rolePermissionMatch[1]]); for (const permission of [...new Set(body.permissions.map(String))]) await connection.execute('INSERT INTO role_permissions (role_key,permission_code) VALUES (?,?)', [rolePermissionMatch[1], permission]); await connection.commit(); } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+    audit('更新角色权限', 'role', rolePermissionMatch[1], `${body.permissions.length} 项`); return json(response, 200, { ok: true }), true;
+  }
+  const roleMatch = url.pathname.match(/^\/api\/roles\/([a-zA-Z0-9_]+)$/);
+  if (roleMatch && ['PUT', 'DELETE'].includes(request.method)) {
+    if (request.user?.role !== 'admin') return deny(response, '仅管理员可以管理角色'), true;
+    if (roleMatch[1] === 'admin') return json(response, 400, { message: '系统管理员角色不能修改或删除' }), true;
+    if (request.method === 'DELETE') { const [users] = await pool.execute('SELECT COUNT(*) AS total FROM users WHERE role=?', [roleMatch[1]]); if (Number(users[0].total)) return json(response, 409, { message: '角色仍有关联用户，不能删除' }), true; const [result] = await pool.execute('DELETE FROM roles WHERE role_key=?', [roleMatch[1]]); if (!result.affectedRows) return json(response, 404, { message: '角色不存在' }), true; audit('删除角色', 'role', roleMatch[1], ''); return json(response, 200, { ok: true }), true; }
+    const body = await readBody(request); if (!String(body.name || '').trim()) return json(response, 400, { message: '角色名称不能为空' }), true; const [result] = await pool.execute('UPDATE roles SET name=?,description=?,status=? WHERE role_key=?', [String(body.name).trim(), body.description || '', body.status === 'disabled' ? 'disabled' : 'active', roleMatch[1]]); if (!result.affectedRows) return json(response, 404, { message: '角色不存在' }), true; audit('更新角色', 'role', roleMatch[1], body.name); return json(response, 200, { ok: true }), true;
+  }
   if (request.method === 'GET' && url.pathname === '/api/users') {
     if (request.user?.role !== 'admin') return json(response, 403, { message: '仅管理员可以查看用户' }), true;
     const [rows] = await pool.query('SELECT id,username,display_name AS displayName,dingtalk_user_id AS dingtalkUserId,role,status,DATE_FORMAT(created_at, "%Y-%m-%d %H:%i:%s") AS createdAt FROM users ORDER BY id');
@@ -350,15 +393,22 @@ async function serveMysqlCoreApi(request, response, url) {
   if (request.method === 'POST' && url.pathname === '/api/users') {
     if (request.user?.role !== 'admin') return json(response, 403, { message: '仅管理员可以创建用户' }), true;
     const body = await readBody(request); if (!body.username || !body.password || !body.displayName) return json(response, 400, { message: '请填写账号、密码和姓名' }), true;
-    if (!allowedRoles.includes(body.role || 'project_member')) return json(response, 400, { message: '角色无效' }), true;
+    if (String(body.password).length < 8) return json(response, 400, { message: '初始密码至少需要 8 位' }), true;
+    const requestedRole = body.role || body.roles?.[0] || 'project_member'; if (!await roleExists(requestedRole)) return json(response, 400, { message: '角色无效或已停用' }), true;
     const hash = await bcrypt.hash(String(body.password), 12);
-    try { const [result] = await pool.execute('INSERT INTO users (username,password_hash,display_name,role,status) VALUES (?,?,?,?,?)', [body.username.trim(), hash, body.displayName.trim(), body.role || 'project_member', 'active']); const [rows] = await pool.execute('SELECT id,username,display_name AS displayName,role,status,DATE_FORMAT(created_at, "%Y-%m-%d %H:%i:%s") AS createdAt FROM users WHERE id=?', [result.insertId]); audit('创建用户', 'user', String(result.insertId), body.username.trim()); return json(response, 201, { ...rows[0], id: String(rows[0].id) }), true; } catch (error) { if (error.code === 'ER_DUP_ENTRY') return json(response, 409, { message: '账号已存在' }), true; throw error; }
+    try { const [result] = await pool.execute('INSERT INTO users (username,password_hash,display_name,role,status) VALUES (?,?,?,?,?)', [body.username.trim(), hash, body.displayName.trim(), requestedRole, 'active']); const [rows] = await pool.execute('SELECT id,username,display_name AS displayName,role,status,DATE_FORMAT(created_at, "%Y-%m-%d %H:%i:%s") AS createdAt FROM users WHERE id=?', [result.insertId]); audit('创建用户', 'user', String(result.insertId), body.username.trim()); return json(response, 201, { ...rows[0], id: String(rows[0].id) }), true; } catch (error) { if (error.code === 'ER_DUP_ENTRY') return json(response, 409, { message: '账号已存在' }), true; throw error; }
   }
   const userMatch = url.pathname.match(/^\/api\/users\/([^/]+)$/);
+  if (userMatch && request.method === 'GET') {
+    if (request.user?.role !== 'admin') return deny(response, '仅管理员可以查看用户详情');
+    const [rows] = await pool.execute('SELECT id,username,display_name AS displayName,role,status,DATE_FORMAT(created_at,"%Y-%m-%d %H:%i:%s") AS createdAt FROM users WHERE id=?', [userMatch[1]]);
+    if (!rows[0]) return json(response, 404, { message: '用户不存在' }), true;
+    return json(response, 200, { ...rows[0], id: String(rows[0].id), roles: [rows[0].role], projects: [] }), true;
+  }
   if (userMatch && request.method === 'PATCH') {
     if (request.user?.role !== 'admin') return json(response, 403, { message: '仅管理员可以修改用户' }), true;
     const body = await readBody(request); const [current] = await pool.execute('SELECT id,role,status FROM users WHERE id=?', [userMatch[1]]); if (!current[0]) return json(response, 404, { message: '用户不存在' }), true;
-    const role = body.role || current[0].role, status = body.status || current[0].status; if (!allowedRoles.includes(role) || !['active', 'disabled'].includes(status)) return json(response, 400, { message: '用户状态或角色无效' }), true;
+    const role = body.role || body.roles?.[0] || current[0].role, status = body.status || current[0].status; if (!await roleExists(role) || !['active', 'disabled', 'locked', 'departed'].includes(status)) return json(response, 400, { message: '用户状态或角色无效' }), true;
     if (String(current[0].id) === String(request.user.sub) && (status !== 'active' || role !== 'admin')) return json(response, 400, { message: '不能降级或停用当前管理员账号' }), true;
     await pool.execute('UPDATE users SET role=?,status=?,display_name=COALESCE(?,display_name) WHERE id=?', [role, status, body.displayName || null, userMatch[1]]); const [rows] = await pool.execute('SELECT id,username,display_name AS displayName,role,status,DATE_FORMAT(created_at, "%Y-%m-%d %H:%i:%s") AS createdAt FROM users WHERE id=?', [userMatch[1]]); audit('更新用户', 'user', userMatch[1], `${role}/${status}`); return json(response, 200, { ...rows[0], id: String(rows[0].id) }), true;
   }
@@ -367,10 +417,11 @@ async function serveMysqlCoreApi(request, response, url) {
     return json(response, 200, rows[0] ? parseJsonColumn(rows[0].template_json) : {}), true;
   }
   if (request.method === 'GET' && url.pathname === '/api/sop/templates') { const [rows] = await pool.query('SELECT id,name,version,status,updated_at AS updatedAt FROM sop_templates ORDER BY updated_at DESC,id DESC'); return json(response,200,rows.map(row=>({...row,id:String(row.id)}))),true; }
-  if (request.method === 'POST' && url.pathname === '/api/sop/templates') { const body=await readBody(request); if(!body.name||!Array.isArray(body.stages)) return json(response,400,{message:'请填写模板名称和阶段'}),true; normalizeSopWeights(body); const [idRows]=await pool.query('SELECT COALESCE(MAX(id),0)+1 AS nextId FROM sop_templates'); const templateId=Number(idRows[0].nextId); await pool.execute('INSERT INTO sop_templates (id,name,version,status,template_json) VALUES (?,?,?,?,?)',[templateId,body.name,body.version||'V1.0',body.status||'草稿',JSON.stringify(body)]); audit('创建SOP模板','sop',String(templateId),body.name); return json(response,201,{id:String(templateId),name:body.name,version:body.version||'V1.0',status:body.status||'草稿'}),true; }
+  if (request.method === 'POST' && url.pathname === '/api/sop/templates') { const body=await readBody(request); if(!body.name||!Array.isArray(body.stages)) return json(response,400,{message:'请填写模板名称和阶段'}),true; normalizeSopWeights(body); const [result]=await pool.execute('INSERT INTO sop_templates (name,version,status,template_json) VALUES (?,?,?,?)',[body.name,body.version||'V1.0',body.status||'草稿',JSON.stringify(body)]); const templateId=result.insertId; audit('创建SOP模板','sop',String(templateId),body.name); return json(response,201,{id:String(templateId),name:body.name,version:body.version||'V1.0',status:body.status||'草稿'}),true; }
   const sopTemplateMatch=url.pathname.match(/^\/api\/sop\/templates\/(\d+)$/);
   if (sopTemplateMatch && request.method === 'GET') { const [rows]=await pool.execute('SELECT template_json FROM sop_templates WHERE id=?',[sopTemplateMatch[1]]); return rows[0]?(json(response,200,parseJsonColumn(rows[0].template_json)),true):(json(response,404,{message:'模板不存在'}),true); }
   if (sopTemplateMatch && request.method === 'PUT') { const body=await readBody(request); if(!body.name||!Array.isArray(body.stages)) return json(response,400,{message:'请填写模板名称和阶段'}),true; normalizeSopWeights(body); await pool.execute('UPDATE sop_templates SET name=?,version=?,status=?,template_json=? WHERE id=?',[body.name,body.version||'V1.0',body.status||'草稿',JSON.stringify(body),sopTemplateMatch[1]]); audit('更新SOP模板','sop',sopTemplateMatch[1],body.name); return json(response,200,{...body,id:sopTemplateMatch[1]}),true; }
+  if (sopTemplateMatch && request.method === 'DELETE') { if (sopTemplateMatch[1] === '1') return json(response,409,{message:'默认 SOP 模板不能删除'}),true; const [used]=await pool.execute('SELECT COUNT(*) AS total FROM project_plans WHERE source_template=(SELECT name FROM sop_templates WHERE id=?)',[sopTemplateMatch[1]]); if(Number(used[0]?.total)>0)return json(response,409,{message:'该 SOP 已被项目使用，不能删除'}),true;const [result]=await pool.execute('DELETE FROM sop_templates WHERE id=?',[sopTemplateMatch[1]]);if(!result.affectedRows)return json(response,404,{message:'模板不存在'}),true;audit('删除SOP模板','sop',sopTemplateMatch[1],'');return json(response,200,{ok:true}),true; }
   if (request.method === 'PUT' && url.pathname === '/api/sop/template') {
     const body = await readBody(request); if (!Array.isArray(body.stages)) return json(response, 400, { message: 'SOP阶段不能为空' }), true; normalizeSopWeights(body);
     await pool.execute('INSERT INTO sop_templates (id,name,version,status,template_json) VALUES (1,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),version=VALUES(version),status=VALUES(status),template_json=VALUES(template_json)', [body.name || '标准实施SOP', body.version || 'V1.0', body.status || '草稿', JSON.stringify(body)]);
@@ -382,19 +433,46 @@ async function serveMysqlCoreApi(request, response, url) {
     if (!body.name || !body.customer || !body.managerUserId || !body.plannedGoLive) return json(response, 400, { message: '请填写项目名称、客户、项目经理和计划上线日期' }), true;
     if (request.user.role !== 'admin' && (request.user.role !== 'project_manager' || String(body.managerUserId) !== String(request.user.sub))) return json(response, 403, { message: '项目经理只能创建并负责自己的项目' }), true;
     const [managers] = await pool.execute('SELECT id,display_name FROM users WHERE id=? AND status="active" LIMIT 1', [body.managerUserId]); if (!managers[0]) return json(response, 400, { message: '请选择有效的项目经理账号' }), true;
-    const [result] = await pool.execute('INSERT INTO projects (name, customer, manager_id, manager_name, stage, progress, planned_go_live, health) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [body.name, body.customer, managers[0].id, managers[0].display_name, '事前准备', 0, body.plannedGoLive, '正常']);
-    await pool.execute('INSERT INTO project_members (project_id,user_id,role) VALUES (?,?,?)', [result.insertId, managers[0].id, 'manager']);
-    const [templates] = await pool.execute('SELECT name, version, template_json FROM sop_templates WHERE id=?', [body.sopTemplateId || 1]);
-    const sopApplied = Boolean(templates[0]);
-    if (sopApplied) { const template = normalizeProjectPlanTracking(normalizeSopWeights(parseJsonColumn(templates[0].template_json))); const plan = { projectId: String(result.insertId), sourceTemplateId: String(body.sopTemplateId || 1), sourceTemplate: templates[0].name, sourceVersion: templates[0].version, createdAt: new Date().toLocaleString('zh-CN', { hour12: false }), stages: template.stages }; await pool.execute('INSERT INTO project_plans (project_id, source_template, source_version, plan_json) VALUES (?, ?, ?, ?)', [result.insertId, templates[0].name, templates[0].version, JSON.stringify(plan)]); }
-    const [rows] = await pool.execute(`SELECT p.*, 0 AS openIssues, 0 AS highRiskIssues FROM projects p WHERE p.id = ?`, [result.insertId]);
-    audit('创建项目', 'project', String(result.insertId), body.name); return json(response, 201, { ...mysqlProject(rows[0]), sopApplied }), true;
+    const connection = await pool.getConnection();
+    let projectId;
+    try {
+      await connection.beginTransaction();
+      const [result] = await connection.execute('INSERT INTO projects (name, customer, manager_id, manager_name, stage, progress, planned_go_live, health) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [String(body.name).trim(), String(body.customer).trim(), managers[0].id, managers[0].display_name, '事前准备', 0, body.plannedGoLive, '正常']);
+      projectId = result.insertId;
+      await connection.execute('INSERT INTO project_members (project_id,user_id,role) VALUES (?,?,?)', [projectId, managers[0].id, 'manager']);
+      const [templates] = await connection.execute('SELECT name, version, template_json FROM sop_templates WHERE id=?', [body.sopTemplateId || 1]);
+      const sopApplied = Boolean(templates[0]);
+      if (sopApplied) { const template = normalizeProjectPlanTracking(normalizeSopWeights(parseJsonColumn(templates[0].template_json))); const plan = { projectId: String(projectId), sourceTemplateId: String(body.sopTemplateId || 1), sourceTemplate: templates[0].name, sourceVersion: templates[0].version, createdAt: new Date().toLocaleString('zh-CN', { hour12: false }), stages: template.stages }; await connection.execute('INSERT INTO project_plans (project_id, source_template, source_version, plan_json) VALUES (?, ?, ?, ?)', [projectId, templates[0].name, templates[0].version, JSON.stringify(plan)]); }
+      await connection.commit();
+      const [rows] = await pool.execute(`SELECT p.*, 0 AS openIssues, 0 AS highRiskIssues FROM projects p WHERE p.id = ?`, [projectId]);
+      audit('创建项目', 'project', String(projectId), body.name); return json(response, 201, { ...mysqlProject(rows[0]), sopApplied }), true;
+    } catch (error) { try { await connection.rollback(); } catch {} throw error; } finally { connection.release(); }
+  }
+  if (userMatch && request.method === 'DELETE') {
+    if (request.user?.role !== 'admin') return deny(response, '仅管理员可以停用用户'), true;
+    if (String(userMatch[1]) === String(request.user.sub)) return json(response, 400, { message: '不能停用当前登录账号' }), true;
+    const [result] = await pool.execute('UPDATE users SET status="departed" WHERE id=?', [userMatch[1]]);
+    if (!result.affectedRows) return json(response, 404, { message: '用户不存在' }), true;
+    audit('停用用户', 'user', userMatch[1], 'departed'); return json(response, 200, { ok: true }), true;
   }
   const projectSopSyncMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/plan\/sync-sop$/);
+  const projectScheduleMatch = url.pathname.match(/^\/api\/projects\/(\d+)\/schedule$/);
+  const projectOperationsMatch = url.pathname.match(/^\/api\/projects\/(\d+)\/operations$/);
   const projectPlanMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/plan$/);
   const projectChecklistMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/plan\/checklist$/);
   const projectChecklistItemMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/plan\/checklist\/([^/]+)$/);
   const projectStartMatch=url.pathname.match(/^\/api\/projects\/(\d+)\/start$/);
+  if (projectScheduleMatch && request.method === 'PATCH') {
+    if (!await projectAccessAllowed(pool, request.user, projectScheduleMatch[1])) return deny(response, '无权调整项目排期'), true;
+    const body = await readBody(request); if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.plannedGoLive || ''))) return json(response, 400, { message: '计划上线日期格式不正确' }), true;
+    const [result] = await pool.execute('UPDATE projects SET planned_go_live=? WHERE id=?', [body.plannedGoLive, projectScheduleMatch[1]]); if (!result.affectedRows) return json(response, 404, { message: '项目不存在' }), true;
+    const [taskRows] = await pool.execute('SELECT due_date,progress FROM tasks WHERE project_id=? AND status<>"已完成"', [projectScheduleMatch[1]]); const remainingWorkdays = taskRows.reduce((sum, task) => sum + Math.max(1, Math.ceil((100 - Number(task.progress || 0)) / 20)), 0); const estimated = new Date(); estimated.setDate(estimated.getDate() + remainingWorkdays); const planned = new Date(`${body.plannedGoLive}T00:00:00`), variance = Math.round((estimated - planned) / 86400000);
+    const [rows] = await pool.execute('SELECT p.*,0 AS openIssues,0 AS highRiskIssues FROM projects p WHERE id=?', [projectScheduleMatch[1]]); const project = mysqlProject({ ...rows[0], estimatedGoLive: estimated.toISOString().slice(0, 10), remainingWorkdays, forecastVarianceDays: variance, forecastStatus: rows[0].execution_status === '已暂停' ? '已冻结' : variance > 0 ? '预计延期' : '按计划' }); audit('调整项目排期', 'project', projectScheduleMatch[1], body.plannedGoLive); return json(response, 200, project), true;
+  }
+  if (projectOperationsMatch && request.method === 'PUT') {
+    if (!await projectAccessAllowed(pool, request.user, projectOperationsMatch[1])) return deny(response, '无权维护项目运维信息'), true;
+    const body = await readBody(request); const limit = value => String(value || '').trim().slice(0, 5000); const [result] = await pool.execute('UPDATE projects SET remote_method=?,server_info=?,customer_info=? WHERE id=?', [limit(body.remoteMethod).slice(0,64), limit(body.serverInfo), limit(body.customerInfo), projectOperationsMatch[1]]); if (!result.affectedRows) return json(response, 404, { message: '项目不存在' }), true; audit('更新项目运维信息', 'project', projectOperationsMatch[1], ''); return json(response, 200, { remoteMethod: limit(body.remoteMethod).slice(0,64), serverInfo: limit(body.serverInfo), customerInfo: limit(body.customerInfo) }), true;
+  }
   if(projectSopSyncMatch&&request.method==='POST'){
     const projectId=projectSopSyncMatch[1];if(!await projectAccessAllowed(pool,request.user,projectId))return json(response,403,{message:'无权同步该项目的 SOP'}),true;
     const body=await readBody(request),mode=body.mode==='replace'?'replace':'merge';if(!body.sopTemplateId)return json(response,400,{message:'请选择要同步的 SOP 模板'}),true;
@@ -450,7 +528,8 @@ async function serveMysqlCoreApi(request, response, url) {
   }
   const memberMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/members$/);
   if (memberMatch && request.method === 'GET') {
-    if (request.user?.role !== 'admin') return json(response, 403, { message: '仅管理员可以查看项目成员' }), true;
+    if (!hasPermission('project.members')) return json(response, 403, { message: '无权查看项目成员' }), true;
+    if (!await projectAccessAllowed(pool, request.user, memberMatch[1])) return json(response, 403, { message: '无权访问该项目' }), true;
     const [projects] = await pool.execute('SELECT id,manager_id AS managerId,DATE_FORMAT(planned_go_live,"%Y-%m-%d") AS plannedGoLive FROM projects WHERE id=?', [memberMatch[1]]);
     if (!projects[0]) return json(response, 404, { message: '项目不存在' }), true;
     const [members] = await pool.execute('SELECT u.id,u.username,u.display_name AS displayName,u.role,pm.role AS projectRole FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=? ORDER BY u.display_name,u.id', [memberMatch[1]]);
@@ -462,7 +541,8 @@ async function serveMysqlCoreApi(request, response, url) {
     }), true;
   }
   if (memberMatch && request.method === 'PUT') {
-    if (request.user?.role !== 'admin') return json(response, 403, { message: '仅管理员可以分配项目成员' }), true;
+    if (!hasPermission('project.members')) return json(response, 403, { message: '无权分配项目成员' }), true;
+    if (!await projectAccessAllowed(pool, request.user, memberMatch[1])) return json(response, 403, { message: '无权访问该项目' }), true;
     const body = await readBody(request);
     if (!body.managerUserId || !Array.isArray(body.members)) return json(response, 400, { message: '请选择项目经理并提交成员列表' }), true;
     const connection = await pool.getConnection();
@@ -486,6 +566,21 @@ async function serveMysqlCoreApi(request, response, url) {
     } finally { connection.release(); }
   }
   const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
+  if (projectMatch && ['PUT', 'DELETE'].includes(request.method)) {
+    if (!await projectAccessAllowed(pool, request.user, projectMatch[1])) return json(response, 403, { message: '无权操作该项目' }), true;
+    const [found] = await pool.execute('SELECT * FROM projects WHERE id=?', [projectMatch[1]]);
+    if (!found[0]) return json(response, 404, { message: '项目不存在' }), true;
+    if (request.method === 'PUT') {
+      const body = await readBody(request);
+      if (!String(body.name || '').trim() || !String(body.customer || '').trim()) return json(response, 400, { message: '项目名称和客户不能为空' }), true;
+      await pool.execute('UPDATE projects SET name=?,customer=? WHERE id=?', [String(body.name).trim(), String(body.customer).trim(), projectMatch[1]]);
+      const [rows] = await pool.execute('SELECT p.*,0 AS openIssues,0 AS highRiskIssues FROM projects p WHERE p.id=?', [projectMatch[1]]);
+      audit('编辑项目', 'project', projectMatch[1], rows[0].name); return json(response, 200, mysqlProject(rows[0])), true;
+    }
+    const [blockers] = await pool.query('SELECT (SELECT COUNT(*) FROM tasks WHERE project_id=?) + (SELECT COUNT(*) FROM issues WHERE project_id=?) + (SELECT COUNT(*) FROM documents WHERE project_id=?) AS total', [projectMatch[1], projectMatch[1], projectMatch[1]]);
+    if (Number(blockers[0]?.total) > 0) return json(response, 409, { message: '项目仍有关联数据，不能删除', blockers: { total: Number(blockers[0].total) } }), true;
+    await pool.execute('DELETE FROM projects WHERE id=?', [projectMatch[1]]); audit('删除项目', 'project', projectMatch[1], found[0].name); return json(response, 200, { ok: true }), true;
+  }
   if (projectMatch && request.method === 'GET') { const projects = await mysqlProjectList(pool, request.user); const project = projects.find(item => item.id === projectMatch[1]); return project ? (json(response, 200, project), true) : (json(response, 404, { message: '项目不存在' }), true); }
   if (request.method === 'GET' && url.pathname === '/api/tasks') {
     const [rows] = await pool.query('SELECT t.id, t.project_id AS projectId, t.plan_task_id AS planTaskId, t.name, p.name AS project, t.stage, t.owner_name AS owner, DATE_FORMAT(t.due_date, "%Y-%m-%d") AS dueDate, t.progress, t.status, t.progress_note AS progressNote, DATE_FORMAT(t.updated_at, "%Y-%m-%d %H:%i:%s") AS updatedAt FROM tasks t JOIN projects p ON p.id = t.project_id ORDER BY t.id DESC'); const allowed = await allowedProjectIds(pool, request.user); return json(response, 200, rows.filter(row => !allowed || allowed.has(String(row.projectId))).map(({ projectId, ...row }) => ({ ...row, id: String(row.id), progress: Number(row.progress) }))), true;
@@ -556,6 +651,14 @@ async function serveMysqlCoreApi(request, response, url) {
     response.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent('项目周报.md')}` }); response.end(report); return true;
   }
   if (request.method === 'GET' && url.pathname === '/api/dashboard') { const projects = await mysqlProjectList(pool, request.user); const [delayed] = await pool.query(request.user?.role === 'admin' ? "SELECT COUNT(DISTINCT project_id) AS total FROM tasks WHERE status='已延期'" : "SELECT COUNT(DISTINCT t.project_id) AS total FROM tasks t JOIN project_members pm ON pm.project_id=t.project_id WHERE t.status='已延期' AND pm.user_id=?", request.user?.role === 'admin' ? [] : [request.user.sub]); return json(response, 200, { total: projects.length, active: projects.filter(item => item.progress < 100).length, delayed: Number(delayed[0].total), highRisk: projects.filter(item => item.health === '高风险').length }), true; }
+  if (request.method === 'GET' && url.pathname === '/api/audit-logs') {
+    if (request.user?.role !== 'admin' && !hasPermission('audit.view')) return deny(response, '无权查看操作日志'), true;
+    const [rows] = await pool.query('SELECT a.id,a.action,a.target_type AS targetType,a.target_id AS targetId,a.detail,COALESCE(u.display_name,"系统") AS operator,DATE_FORMAT(a.created_at,"%Y-%m-%d %H:%i:%s") AS time FROM audit_logs a LEFT JOIN users u ON u.id=a.operator_id ORDER BY a.id DESC LIMIT 500'); return json(response, 200, rows.map(row => ({ ...row, id: String(row.id) }))), true;
+  }
+  if (request.method === 'GET' && url.pathname === '/api/login-logs') {
+    if (request.user?.role !== 'admin') return deny(response, '仅管理员可以查看登录日志'), true;
+    const [rows] = await pool.query('SELECT id,username,success,ip_address AS ipAddress,browser,message,DATE_FORMAT(created_at,"%Y-%m-%d %H:%i:%s") AS time FROM login_logs ORDER BY id DESC LIMIT 500'); return json(response, 200, rows.map(row => ({ ...row, id: String(row.id), success: Boolean(row.success) }))), true;
+  }
   if (url.pathname === '/api/knowledge' || url.pathname.startsWith('/api/knowledge/')) {
     const knowledgeMatch = url.pathname.match(/^\/api\/knowledge\/(\d+)(?:\/(submit|review|deposit))?$/);
     const can = permission => hasPermission(permission);
@@ -577,6 +680,13 @@ function serveStatic(response, relativePath) {
   response.writeHead(200, target.endsWith('.html') ? { 'Content-Type': type, 'Cache-Control': 'no-store, max-age=0' } : { 'Content-Type': type });
   fs.createReadStream(target).pipe(response);
   return true;
+}
+function deny(response, message = '无权执行该操作') { json(response, 403, { message }); return true; }
+function requireApiPermission(response, user, permission, message) {
+  return requirePermission(user, permission) ? null : deny(response, message || `缺少权限：${permission}`);
+}
+function requireWriteAccess(response, user, permission, message) {
+  return requireApiPermission(response, user, permission, message);
 }
 
 function serveDeliverableTemplate(response, pathname) {
@@ -601,16 +711,25 @@ function serveDeliverableTemplate(response, pathname) {
 }
 
 const port = Number(process.env.PORT || 3030);
+const loginThrottle = new LoginThrottle();
+function clientAddress(request) {
+  const forwarded = request.headers['x-forwarded-for'];
+  return (Array.isArray(forwarded) ? forwarded[0] : String(forwarded || '')).split(',')[0].trim() || request.socket?.remoteAddress || '-';
+}
+function loginKey(request, username) { return `${clientAddress(request)}:${String(username || '').trim().toLowerCase()}`; }
 async function validateDatabaseSchema() {
   if (!mysqlConfigured()) throw new Error('系统业务功能需要配置 MySQL');
-  const [rows] = await getPool().execute('SELECT version FROM schema_migrations WHERE version=?', ['round1-technical-audit']);
-  if (!rows.length) throw new Error('数据库缺少 round1-technical-audit 迁移，请先执行 npm run db:migrate-round1');
+  const [rows] = await getPool().execute('SELECT version FROM schema_migrations WHERE version IN (?,?)', ['round1-technical-audit', 'overnight-hardening-v1']);
+  const versions = new Set(rows.map(row => row.version));
+  if (!versions.has('round1-technical-audit')) throw new Error('数据库缺少 round1-technical-audit 迁移，请先执行 npm run db:migrate-round1');
+  if (!versions.has('overnight-hardening-v1')) throw new Error('数据库缺少 overnight-hardening-v1 迁移，请先执行 npm run db:migrate-hardening');
 }
 async function startServer() {
   await validateDatabaseSchema();
   return http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
   try {
+    if (!sameOriginWriteAllowed(request)) return json(response, 403, { message: '已拒绝跨站写请求' });
     if (request.method === 'GET' && url.pathname === '/api/health') return json(response, 200, { ok: true, service: 'pis-project-delivery-center' });
     if (request.method === 'GET' && url.pathname === '/api/auth/config') {
       return json(response, 200, { passwordLogin: authReady(), dingtalkLogin: Boolean(process.env.DINGTALK_CLIENT_ID && process.env.DINGTALK_CLIENT_SECRET && process.env.DINGTALK_CORP_ID) });
@@ -619,8 +738,12 @@ async function startServer() {
       const body = await readBody(request);
       if (!body.username || !body.password) return json(response, 400, { message: '请输入账号和密码' });
       if (!authReady()) return json(response, 503, { message: '登录服务尚未配置：请完成 MySQL 与 JWT_SECRET 配置' });
+      const key = loginKey(request, body.username);
+      if (loginThrottle.blocked(key)) return json(response, 429, { message: '登录失败次数过多，请 15 分钟后重试' });
       const result = await passwordLogin(String(body.username).trim(), String(body.password));
-      if (!result) return json(response, 401, { message: '账号或密码错误，或账号已停用' });
+      if (!result) { loginThrottle.fail(key); await getPool().execute('INSERT INTO login_logs (username,success,ip_address,browser,message) VALUES (?,0,?,?,?)', [String(body.username).trim().slice(0,64), clientAddress(request), String(request.headers['user-agent'] || '').slice(0,500), '账号或密码错误，或账号已停用']); return json(response, 401, { message: '账号或密码错误，或账号已停用' }); }
+      loginThrottle.clear(key);
+      await getPool().execute('INSERT INTO login_logs (username,success,ip_address,browser,message) VALUES (?,1,?,?,?)', [result.user.username, clientAddress(request), String(request.headers['user-agent'] || '').slice(0,500), '登录成功']);
       // Direct HTTP deployments cannot retain cookies marked Secure. Enable this
       // explicitly once the service is placed behind an HTTPS reverse proxy.
       const secure = process.env.COOKIE_SECURE === 'true' ? '; Secure' : '';
@@ -630,6 +753,12 @@ async function startServer() {
     if (request.method === 'POST' && url.pathname === '/api/auth/logout') {
       response.setHeader('Set-Cookie', 'pis_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
       return json(response, 200, { ok: true });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/auth/change-password') {
+      const token = readCookie(request, 'pis_session'); let user; try { user = verifyToken(token); } catch { return json(response, 401, { message: '请先登录' }); }
+      const body = await readBody(request); if (!body.currentPassword || String(body.newPassword || '').length < 8) return json(response, 400, { message: '请填写当前密码，新密码至少 8 位' });
+      const [rows] = await getPool().execute('SELECT password_hash FROM users WHERE id=? AND status="active"', [user.sub]); if (!rows[0] || !(await bcrypt.compare(String(body.currentPassword), rows[0].password_hash))) return json(response, 400, { message: '当前密码不正确' });
+      const hash = await bcrypt.hash(String(body.newPassword), 12); await getPool().execute('UPDATE users SET password_hash=? WHERE id=?', [hash, user.sub]); await writeAudit('修改密码', 'user', user.sub, '', user, clientAddress(request)); response.setHeader('Set-Cookie', 'pis_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'); return json(response, 200, { ok: true, relogin: true });
     }
     if (request.method === 'GET' && url.pathname === '/api/auth/me') {
       const token = readCookie(request, 'pis_session');
@@ -648,12 +777,12 @@ async function startServer() {
       const token = readCookie(request, 'pis_session');
       try {
         request.user = verifyToken(token);
-        const forwarded = request.headers['x-forwarded-for'];
-        request.ipAddress = (Array.isArray(forwarded) ? forwarded[0] : String(forwarded || '')).split(',')[0].trim() || request.socket?.remoteAddress || '-';
+        request.ipAddress = clientAddress(request);
         if (mysqlConfigured()) request.user.permissions = await loadUserPermissions(getPool(), request.user);
       } catch { return json(response, 401, { message: '请先登录后再访问系统数据' }); }
     }
     if (await serveMysqlCoreApi(request, response, url)) return;
+    if (url.pathname.startsWith('/api/')) return json(response, 404, { message: '接口不存在' });
     if (request.method === 'GET' && url.pathname === '/api/integrations/zentao/status') {
       const tasks = readTasks();
       return json(response, 200, { ...publicZentaoSettings(), total: tasks.filter(task => task.zentaoStatus).length, synced: tasks.filter(task => task.zentaoStatus === '已同步').length, failed: tasks.filter(task => task.zentaoStatus === '同步失败').length });
@@ -800,7 +929,7 @@ async function startServer() {
     if (request.method === 'GET' && serveDeliverableTemplate(response, url.pathname)) return;
     if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) return serveStatic(response, 'index.html');
     json(response, 404, { message: '接口不存在' });
-  } catch (error) { json(response, 500, { message: error.message || '服务器错误' }); }
+  } catch (error) { json(response, error.statusCode || 500, { message: error.message || '服务器错误' }); }
   }).listen(port, () => console.log(`实施项目管理平台运行于 http://localhost:${port}`));
 }
 startServer().catch(error => { console.error(error.message); process.exitCode = 1; });

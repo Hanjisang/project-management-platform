@@ -7,4 +7,4 @@ COPY . ./
 
 ENV NODE_ENV=production
 EXPOSE 3030
-CMD ["sh", "-c", "node scripts/migrate-round1-technical-audit.js && node scripts/ensure-admin.js && node server.js"]
+CMD ["sh", "-c", "node scripts/migrate-round1-technical-audit.js && node scripts/migrate-overnight-hardening.js && node scripts/ensure-admin.js && node server.js"]
