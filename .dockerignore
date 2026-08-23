@@ -3,4 +3,9 @@ node_modules
 .env.deploy
 data
 npm-debug.log
-*.md
+.git
+.github
+coverage
+playwright-report
+test-results
+templates/templates.7z
