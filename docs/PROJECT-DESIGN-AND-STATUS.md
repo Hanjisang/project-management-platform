@@ -1,3 +1,5 @@
+> 历史说明：本文记录 V1 设计与状态，V2 当前架构以 `docs/ARCHITECTURE.md`、`docs/DATABASE.md` 和根目录 README 为准。
+
 # 实施项目管理平台：完整设计与开发状态
 
 > 文档基线：2026-07-28
@@ -207,8 +209,7 @@ Node.js 原生 HTTP 服务 server.js
 
 ### 8.3 待验证与待完成
 
-- 在具备 Docker 的环境执行真实 Docker/MySQL 迁移、消息事务和文档补偿冒烟测试。
-- 为 MySQL 消息创建和确认补齐更完整的 HTTP/数据库 mock 行为测试矩阵。
+- 本节为 V1 历史待办；Docker/MySQL、消息事务幂等和文档补偿已在 V2 中以真实 MySQL 集成测试和 Docker 冒烟完成验证。
 - 清理仍保留的非消息 JSON 兼容业务路径，最终形成纯 MySQL 运行模式。
 - 将 `server.js` 拆分为路由、服务、仓储和领域模块。
 - 增加数据库外键、约束审查，以及备份恢复演练。
@@ -228,7 +229,7 @@ Node.js 原生 HTTP 服务 server.js
 - 已废弃 DDL helper：无匹配。
 - JSON 消息文件变量和读写函数：无匹配。
 
-限制说明：当前执行环境未安装 Docker，因此未执行真实 Docker/MySQL 冒烟测试。该项需在 PR 合并或部署前，在具备 Docker 的环境补充验证。
+V2 现状：2026-08-23 已完成真实 MySQL 8.4.11 双空库初始化、15 项集成测试和 Docker Compose 构建/启动/健康/冒烟验证。完整结果见 `docs/V2-PRODUCTION-ACCEPTANCE.md`。
 
 ## 10. 后续迭代建议
 

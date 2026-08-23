@@ -1,0 +1,30 @@
+{
+  "name": "@pmp/web",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "typecheck": "vue-tsc -b --pretty false",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "@pmp/shared-constants": "*",
+    "@pmp/shared-types": "*",
+    "@tanstack/vue-query": "^5.102.1",
+    "axios": "^1.19.0",
+    "dayjs": "^1.11.19",
+    "element-plus": "^2.14.5",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.41",
+    "vue-router": "^5.0.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "vite": "^8.2.2",
+    "vue-tsc": "^3.1.1",
+    "vitest": "^4.1.11"
+  }
+}

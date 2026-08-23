@@ -1,4 +1,4 @@
-name: CI
+name: V2 CI
 
 on:
   push:
@@ -7,14 +7,61 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root-test-password
+          MYSQL_DATABASE: pmp_test
+          MYSQL_USER: pmp
+          MYSQL_PASSWORD: pmp-test-password
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -upmp -ppmp-test-password --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://pmp:pmp-test-password@127.0.0.1:3306/pmp_test
+      TEST_DATABASE_URL: mysql://pmp:pmp-test-password@127.0.0.1:3306/pmp_test
+      JWT_ACCESS_SECRET: ci-access-secret-with-at-least-32-characters
+      JWT_REFRESH_SECRET: ci-refresh-secret-with-at-least-32-characters
+      CORS_ORIGIN: http://127.0.0.1:5173
+      COOKIE_SECURE: 'false'
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: integration-admin-password
+      ADMIN_DISPLAY_NAME: 集成测试管理员
+      AI_ENABLED: 'false'
+      AI_FAKE_ENABLED: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
-      - run: node --check server.js
-      - run: npm test
+      - run: npm audit --audit-level=high
+      - name: Build shared workspace packages
+        run: |
+          npm run build -w @pmp/shared-types
+          npm run build -w @pmp/shared-constants
+          npm run build -w @pmp/shared-utils
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - run: npm run db:migrate:deploy
+      - run: npm run db:seed
+      - run: npm run test:integration
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.deploy.example .env.deploy
+      - run: docker compose --env-file .env.deploy config --quiet
+      - run: docker build --file Dockerfile --tag pmp-api:test .
+      - run: docker build --file docker/web.Dockerfile --tag pmp-web:test .

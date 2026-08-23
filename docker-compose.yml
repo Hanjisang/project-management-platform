@@ -1,57 +1,84 @@
+name: pmp-v2
+
 services:
   mysql:
     image: mysql:8.4
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: pis_delivery
-      MYSQL_USER: pis_app
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_DATABASE: pmp
+      MYSQL_USER: pmp
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       TZ: Asia/Shanghai
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -upmp -p$$MYSQL_PASSWORD --silent']
       interval: 5s
       timeout: 5s
       retries: 30
+      start_period: 15s
 
-  app:
-    build: .
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
+    init: true
     depends_on:
       mysql:
         condition: service_healthy
     environment:
-      PORT: 3030
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_DATABASE: pis_delivery
-      MYSQL_USER: pis_app
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_SSL: "false"
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_EXPIRES_IN: 8h
-      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD}
-      DEFAULT_ADMIN_DISPLAY_NAME: ${DEFAULT_ADMIN_DISPLAY_NAME:-System Administrator}
-      DINGTALK_CLIENT_ID: ${DINGTALK_CLIENT_ID:-}
-      DINGTALK_CLIENT_SECRET: ${DINGTALK_CLIENT_SECRET:-}
-      DINGTALK_CORP_ID: ${DINGTALK_CORP_ID:-}
-      DINGTALK_REDIRECT_URI: ${DINGTALK_REDIRECT_URI:-}
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: mysql://pmp:${MYSQL_PASSWORD}@mysql:3306/pmp
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN is required}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      STORAGE_PROVIDER: local
+      STORAGE_PATH: /app/storage
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+      ADMIN_DISPLAY_NAME: ${ADMIN_DISPLAY_NAME:-系统管理员}
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-gpt-5-mini}
+      AI_FAKE_ENABLED: 'false'
+      DINGTALK_APP_KEY: ${DINGTALK_APP_KEY:-}
+      DINGTALK_APP_SECRET: ${DINGTALK_APP_SECRET:-}
+      DINGTALK_SIGNING_SECRET: ${DINGTALK_SIGNING_SECRET:-}
+      DINGTALK_STREAM_ENABLED: ${DINGTALK_STREAM_ENABLED:-false}
       ZENTAO_BASE_URL: ${ZENTAO_BASE_URL:-}
       ZENTAO_TOKEN: ${ZENTAO_TOKEN:-}
-      ZENTAO_EXECUTION_ID: ${ZENTAO_EXECUTION_ID:-}
-      ZENTAO_ASSIGNED_TO: ${ZENTAO_ASSIGNED_TO:-}
-      ZENTAO_TASK_TYPE: ${ZENTAO_TASK_TYPE:-devel}
-      TZ: Asia/Shanghai
-    ports:
-      - "${APP_PORT:-3030}:3030"
     volumes:
-      - app_uploads:/app/data/uploads
+      - app_storage:/app/storage
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:3000/health']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - '${WEB_PORT:-8080}:8080'
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:8080/health']
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 volumes:
   mysql_data:
-  app_uploads:
+  app_storage:

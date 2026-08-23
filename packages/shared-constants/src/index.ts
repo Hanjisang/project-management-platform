@@ -1,0 +1,93 @@
+export const PERMISSIONS = {
+  PROJECT_VIEW: 'project.view',
+  PROJECT_CREATE: 'project.create',
+  PROJECT_EDIT: 'project.edit',
+  PROJECT_DELETE: 'project.delete',
+  PROJECT_START: 'project.start',
+  PROJECT_PAUSE: 'project.pause',
+  PROJECT_CLOSE: 'project.close',
+  PROJECT_MEMBER_MANAGE: 'project.member.manage',
+  SOP_VIEW: 'sop.view',
+  SOP_CREATE: 'sop.create',
+  SOP_EDIT: 'sop.edit',
+  SOP_PUBLISH: 'sop.publish',
+  PLAN_VIEW: 'plan.view',
+  PLAN_EDIT: 'plan.edit',
+  TASK_VIEW: 'task.view',
+  TASK_CREATE: 'task.create',
+  TASK_EDIT: 'task.edit',
+  TASK_COMPLETE: 'task.complete',
+  ISSUE_VIEW: 'issue.view',
+  ISSUE_CREATE: 'issue.create',
+  ISSUE_EDIT: 'issue.edit',
+  ISSUE_CLOSE: 'issue.close',
+  DOCUMENT_VIEW: 'document.view',
+  DOCUMENT_UPLOAD: 'document.upload',
+  DOCUMENT_REVIEW: 'document.review',
+  DOCUMENT_DELETE: 'document.delete',
+  MESSAGE_VIEW: 'message.view',
+  MESSAGE_CREATE: 'message.create',
+  MESSAGE_ANALYZE: 'message.analyze',
+  MESSAGE_CONFIRM: 'message.confirm',
+  REPORT_VIEW: 'report.view',
+  REPORT_SUBMIT: 'report.submit',
+  KNOWLEDGE_VIEW: 'knowledge.view',
+  KNOWLEDGE_CREATE: 'knowledge.create',
+  KNOWLEDGE_REVIEW: 'knowledge.review',
+  USER_MANAGE: 'user.manage',
+  ROLE_MANAGE: 'role.manage',
+  AUDIT_VIEW: 'audit.view',
+  INTEGRATION_MANAGE: 'integration.manage',
+} as const;
+
+export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+export const ALL_PERMISSIONS: PermissionCode[] = Object.values(PERMISSIONS);
+export const DEFAULT_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
+  ADMINISTRATOR: ALL_PERMISSIONS,
+  PROJECT_MANAGER: ALL_PERMISSIONS.filter(
+    (code) => code !== PERMISSIONS.USER_MANAGE && code !== PERMISSIONS.ROLE_MANAGE,
+  ),
+  MEMBER: [
+    PERMISSIONS.PROJECT_VIEW,
+    PERMISSIONS.PLAN_VIEW,
+    PERMISSIONS.TASK_VIEW,
+    PERMISSIONS.TASK_CREATE,
+    PERMISSIONS.TASK_EDIT,
+    PERMISSIONS.TASK_COMPLETE,
+    PERMISSIONS.ISSUE_VIEW,
+    PERMISSIONS.ISSUE_CREATE,
+    PERMISSIONS.ISSUE_EDIT,
+    PERMISSIONS.DOCUMENT_VIEW,
+    PERMISSIONS.DOCUMENT_UPLOAD,
+    PERMISSIONS.MESSAGE_VIEW,
+    PERMISSIONS.REPORT_VIEW,
+    PERMISSIONS.REPORT_SUBMIT,
+    PERMISSIONS.KNOWLEDGE_VIEW,
+  ],
+  VIEWER: [
+    PERMISSIONS.PROJECT_VIEW,
+    PERMISSIONS.PLAN_VIEW,
+    PERMISSIONS.TASK_VIEW,
+    PERMISSIONS.ISSUE_VIEW,
+    PERMISSIONS.DOCUMENT_VIEW,
+    PERMISSIONS.MESSAGE_VIEW,
+    PERMISSIONS.REPORT_VIEW,
+    PERMISSIONS.KNOWLEDGE_VIEW,
+  ],
+};
+export const API_PREFIX = 'api/v2';
+export const DEFAULT_PAGE_SIZE = 20;
+export const MAX_PAGE_SIZE = 100;
+export const PROJECT_STATUS_LABELS: Record<string, string> = {
+  DRAFT: '草稿',
+  NOT_STARTED: '未启动',
+  ACTIVE: '进行中',
+  PAUSED: '已暂停',
+  COMPLETED: '已结项',
+  CANCELLED: '已取消',
+};
+export const PROJECT_HEALTH_LABELS: Record<string, string> = {
+  NORMAL: '正常',
+  WARNING: '预警',
+  HIGH_RISK: '高风险',
+};
