@@ -27,7 +27,7 @@
 | --------------------------------- | ------------------------------------------------ |
 | 空库 1 migration / seed / startup | PASS                                             |
 | 空库 2 migration / seed / startup | PASS                                             |
-| Prisma migration                  | 1/1 applied，无手工 SQL                          |
+| Prisma migration                  | 2/2 applied，无手工 SQL                          |
 | Seed                              | PASS；4 roles / 39 permissions / 1 administrator |
 | Unit                              | 34 passed / 0 skipped / 0 failed                 |
 | Integration                       | 15 passed / 0 skipped / 0 failed                 |
@@ -48,6 +48,8 @@
 | G Message / Fake AI / PendingAction Idempotency | PASS   |
 
 RBAC、Project Scope ID 枚举、Dashboard 统计隔离、Viewer 读取/写入限制、Cookie/CSRF、Refresh Token hash/rotation/logout 失效、Login Rate Limit 和 Message 跨项目确认均通过真实 MySQL 集成验证。
+
+RC 终审进一步确认：单条消息只能存在一个标准分析，重复 Analyze 复用原 PendingAction；项目结项与 Task/Issue/Document/Message 阻塞写入通过项目行锁串行化；Docker 反向代理启用显式 trust-proxy hop，生产部署样例默认使用 Secure Cookie 和 HTTPS CORS。
 
 ## Docker
 

@@ -35,8 +35,9 @@ services:
       DATABASE_URL: mysql://pmp:${MYSQL_PASSWORD}@mysql:3306/pmp
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN is required}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       STORAGE_PROVIDER: local
       STORAGE_PATH: /app/storage
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}

@@ -114,20 +114,17 @@ export class ProjectsService {
     return this.repository.updateStatus(id, 'ACTIVE');
   }
   async close(user: RequestUser, id: string) {
-    const project = await this.get(user, id);
-    if (!['ACTIVE', 'PAUSED'].includes(project.status))
-      throw this.invalidTransition(project.status, 'COMPLETED');
-    const blockers = await this.repository.closureBlockers(id);
-    if (Object.values(blockers).some((items) => items.length > 0))
+    await this.scope.assert(user, id);
+    const result = await this.repository.close(id);
+    if (result.kind === 'not_found') throw this.notFound();
+    if (result.kind === 'invalid_status') throw this.invalidTransition(result.status, 'COMPLETED');
+    if (result.kind === 'blocked')
       throw new ConflictException({
         code: 'PROJECT_CLOSE_BLOCKED',
         message: '项目存在未完成项，暂时无法结项',
-        details: blockers,
+        details: result.blockers,
       });
-    return this.repository.updateStatus(id, 'COMPLETED', {
-      actualGoLiveDate: project.actualGoLiveDate ?? new Date(),
-      progress: 100,
-    });
+    return result.project;
   }
   async remove(user: RequestUser, id: string) {
     const project = await this.get(user, id);

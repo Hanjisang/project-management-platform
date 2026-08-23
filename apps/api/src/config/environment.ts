@@ -13,6 +13,7 @@ const schema = z.object({
   JWT_REFRESH_SECRET: z.string().min(32),
   COOKIE_SECURE: z.enum(['true', 'false']).default('false'),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
   STORAGE_PROVIDER: z.enum(['local', 's3']).default('local'),
   STORAGE_PATH: z.string().default('./storage'),
   AI_ENABLED: z.enum(['true', 'false']).default('false'),

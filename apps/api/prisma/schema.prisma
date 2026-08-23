@@ -639,7 +639,7 @@ model Message {
 
 model MessageAnalysis {
   id           String          @id @default(cuid()) @db.VarChar(30)
-  messageId    String          @map("message_id") @db.VarChar(30)
+  messageId    String          @unique @map("message_id") @db.VarChar(30)
   provider     String          @db.VarChar(80)
   model        String?         @db.VarChar(120)
   status       AnalysisStatus  @default(PENDING)

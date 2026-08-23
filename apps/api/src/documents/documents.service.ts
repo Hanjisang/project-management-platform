@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertProjectWritable } from '../projects/project-mutation';
 import type { CreateDocumentDto, CreateDocumentVersionDto, ReviewDocumentDto } from './dto';
 import { STORAGE_PROVIDER, type StorageProvider } from './storage.provider';
 
@@ -52,8 +53,9 @@ export class DocumentsService {
     await this.validatePlanTask(projectId, dto.planTaskId);
     const stored = await this.storage.put(file.originalname, file.buffer);
     try {
-      return await this.prisma.$transaction((tx) =>
-        tx.document.create({
+      return await this.prisma.$transaction(async (tx) => {
+        await assertProjectWritable(tx, projectId);
+        return tx.document.create({
           data: {
             projectId,
             planTaskId: dto.planTaskId,
@@ -74,8 +76,8 @@ export class DocumentsService {
             },
           },
           include: { versions: true },
-        }),
-      );
+        });
+      });
     } catch (error) {
       await this.compensateStoredObject(stored.objectKey, 'document-create-rollback', error);
       throw error;

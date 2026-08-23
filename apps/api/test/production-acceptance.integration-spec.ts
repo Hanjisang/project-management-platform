@@ -512,6 +512,14 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
     expect(actions.map((item) => item.type)).toEqual(
       expect.arrayContaining(['CREATE_TASK', 'CREATE_ISSUE']),
     );
+    const replayedAnalysis = await write(managerA, 'post', `/api/v2/messages/${messageId}/analyze`)
+      .send({})
+      .expect(201);
+    expect(replayedAnalysis.body.data.id).toBe(analyzed.body.data.id);
+    expect(
+      (replayedAnalysis.body.data.actions as Array<{ id: string }>).map((item) => item.id),
+    ).toEqual(actions.map((item) => item.id));
+    expect(await prisma.messageAnalysis.count({ where: { messageId } })).toBe(1);
     const decisions = actions.map((action) => ({
       actionId: action.id,
       decision: 'CONFIRM',
@@ -520,7 +528,10 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
       write(managerA, 'post', `/api/v2/messages/${messageId}/confirm`).send({ decisions }),
       write(managerA, 'post', `/api/v2/messages/${messageId}/confirm`).send({ decisions }),
     ]);
-    expect([first.status, concurrent.status].every((value) => value < 500)).toBe(true);
+    expect(
+      [first.status, concurrent.status].every((value) => value < 500),
+      `confirm responses: ${first.status} ${JSON.stringify(first.body)} / ${concurrent.status} ${JSON.stringify(concurrent.body)}`,
+    ).toBe(true);
     await write(managerA, 'post', `/api/v2/messages/${messageId}/confirm`)
       .send({ decisions })
       .expect(201);
@@ -577,9 +588,29 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
       where: { projectId: projectA, status: { notIn: ['DONE', 'CANCELLED'] } },
       data: { status: 'DONE', progress: 100, completedAt: new Date() },
     });
-    const closed = await write(managerA, 'post', `/api/v2/projects/${projectA}/close`)
-      .send({})
-      .expect(201);
+    const [closeAttempt, lateTask] = await Promise.all([
+      write(managerA, 'post', `/api/v2/projects/${projectA}/close`).send({}),
+      write(memberA, 'post', '/api/v2/tasks').send({
+        projectId: projectA,
+        title: '结项并发竞态任务',
+      }),
+    ]);
+    expect(
+      (closeAttempt.status === 201 && lateTask.status === 409) ||
+        (closeAttempt.status === 409 && lateTask.status === 201),
+    ).toBe(true);
+    let closed = closeAttempt;
+    if (lateTask.status === 201) {
+      expect(closeAttempt.body.code).toBe('PROJECT_CLOSE_BLOCKED');
+      await write(memberA, 'patch', `/api/v2/tasks/${lateTask.body.data.id}`)
+        .send({ status: 'CANCELLED' })
+        .expect(200);
+      closed = await write(managerA, 'post', `/api/v2/projects/${projectA}/close`)
+        .send({})
+        .expect(201);
+    } else {
+      expect(lateTask.body.code).toBe('PROJECT_READ_ONLY');
+    }
     expect(closed.body.data.status).toBe('COMPLETED');
     expect(closed.body.data.progress).toBe(100);
   });

@@ -1,11 +1,17 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, type MessageSource } from '@prisma/client';
+import {
+  Prisma,
+  type MessageAnalysis,
+  type MessageSource,
+  type PendingAction,
+} from '@prisma/client';
 import { calculateRiskScore } from '@pmp/shared-utils';
 import { z } from 'zod';
 import type { RequestUser } from '../common/types';
@@ -13,6 +19,7 @@ import { ProjectScopeService } from '../auth/project-scope.service';
 import { AI_PROVIDER, type AiProvider } from '../integrations/ai/ai.provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProgressService } from '../project-plans/progress.service';
+import { assertProjectWritable } from '../projects/project-mutation';
 import type { ConfirmMessageDto, CreateManualMessageDto, MessageListQueryDto } from './dto';
 
 const taskPayload = z.object({
@@ -114,14 +121,9 @@ export class MessagesService {
   }
   async analyze(user: RequestUser, messageId: string) {
     const message = await this.getScoped(user, messageId);
-    const analysis = await this.prisma.messageAnalysis.create({
-      data: {
-        messageId,
-        provider: this.ai.status().provider,
-        model: this.ai.status().model,
-        status: 'PENDING',
-      },
-    });
+    const claimed = await this.claimAnalysis(messageId);
+    if (!claimed.execute) return claimed.analysis;
+    const analysis = claimed.analysis;
     try {
       const result = await this.ai.analyze(
         message.content,
@@ -175,6 +177,7 @@ export class MessagesService {
         code: 'PENDING_ACTION_DUPLICATE',
         message: '确认列表包含重复操作',
       });
+    const projectIds = new Set<string>();
     for (const decision of dto.decisions) {
       const action = await this.prisma.pendingAction.findUnique({
         where: { id: decision.actionId },
@@ -185,11 +188,13 @@ export class MessagesService {
           message: '待确认操作不属于该消息',
         });
       await this.scope.assert(user, action.projectId);
+      projectIds.add(action.projectId);
     }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         await this.prisma.$transaction(
           async (tx) => {
+            for (const projectId of projectIds) await assertProjectWritable(tx, projectId);
             for (const decision of dto.decisions) {
               const action = await tx.pendingAction.findUniqueOrThrow({
                 where: { id: decision.actionId },
@@ -403,6 +408,56 @@ export class MessagesService {
       if (response?.code) return response.code;
     }
     return 'AI_ANALYSIS_FAILED';
+  }
+
+  private async claimAnalysis(messageId: string): Promise<{
+    analysis: MessageAnalysis & { actions?: PendingAction[] };
+    execute: boolean;
+  }> {
+    try {
+      const analysis = await this.prisma.messageAnalysis.create({
+        data: {
+          messageId,
+          provider: this.ai.status().provider,
+          model: this.ai.status().model,
+          status: 'PENDING',
+        },
+      });
+      return { analysis, execute: true };
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002')
+        throw error;
+    }
+    const existing = await this.prisma.messageAnalysis.findUniqueOrThrow({
+      where: { messageId },
+      include: { actions: true },
+    });
+    if (existing.status === 'SUCCEEDED') return { analysis: existing, execute: false };
+    if (existing.status === 'PENDING')
+      throw new ConflictException({
+        code: 'MESSAGE_ANALYSIS_IN_PROGRESS',
+        message: '消息正在分析，请勿重复提交',
+      });
+    const claim = await this.prisma.messageAnalysis.updateMany({
+      where: { id: existing.id, status: 'FAILED' },
+      data: {
+        status: 'PENDING',
+        errorCode: null,
+        errorMessage: null,
+        completedAt: null,
+        provider: this.ai.status().provider,
+        model: this.ai.status().model,
+      },
+    });
+    if (claim.count !== 1)
+      throw new ConflictException({
+        code: 'MESSAGE_ANALYSIS_IN_PROGRESS',
+        message: '消息正在分析，请勿重复提交',
+      });
+    return {
+      analysis: await this.prisma.messageAnalysis.findUniqueOrThrow({ where: { id: existing.id } }),
+      execute: true,
+    };
   }
 
   private isTransactionConflict(error: unknown): boolean {

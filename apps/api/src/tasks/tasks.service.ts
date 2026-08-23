@@ -9,6 +9,7 @@ import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProjectsService } from '../projects/projects.service';
+import { assertProjectWritable } from '../projects/project-mutation';
 import type { CreateTaskDto, TaskListQueryDto, UpdateTaskDto } from './dto';
 
 @Injectable()
@@ -68,14 +69,17 @@ export class TasksService {
   async create(user: RequestUser, dto: CreateTaskDto) {
     await this.scope.assert(user, dto.projectId);
     await this.validateReferences(dto.projectId, dto.ownerUserId, dto.planTaskId);
-    const task = await this.prisma.task.create({
-      data: {
-        ...dto,
-        title: dto.title.trim(),
-        priority: dto.priority ?? 'MEDIUM',
-        sourceType: dto.sourceType ?? 'MANUAL',
-        createdById: user.id,
-      },
+    const task = await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, dto.projectId);
+      return tx.task.create({
+        data: {
+          ...dto,
+          title: dto.title.trim(),
+          priority: dto.priority ?? 'MEDIUM',
+          sourceType: dto.sourceType ?? 'MANUAL',
+          createdById: user.id,
+        },
+      });
     });
     await this.projects.recomputeHealth(dto.projectId);
     return task;

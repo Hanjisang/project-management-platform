@@ -1,6 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, type ProjectStatus, type ProjectHealth, type ProjectRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { lockProject } from './project-mutation';
+
+type ClosureBlockers = Awaited<ReturnType<ProjectsRepository['closureBlockers']>>;
+type CloseResult =
+  | { kind: 'closed'; project: Awaited<ReturnType<ProjectsRepository['updateStatus']>> }
+  | { kind: 'blocked'; blockers: ClosureBlockers }
+  | { kind: 'invalid_status'; status: ProjectStatus }
+  | { kind: 'not_found' };
 
 @Injectable()
 export class ProjectsRepository {
@@ -126,48 +134,84 @@ export class ProjectsRepository {
     });
   }
   closureBlockers(projectId: string) {
-    return this.prisma.$transaction(async (tx) => {
-      const incompletePlanTasks = await tx.projectPlanTask.findMany({
-        where: { stage: { plan: { projectId } }, required: true, progress: { lt: 100 } },
-        select: { id: true, name: true },
-      });
-      const incompleteTasks = await tx.task.findMany({
-        where: { projectId, status: { notIn: ['DONE', 'CANCELLED'] } },
-        select: { id: true, title: true },
-      });
-      const openHighPriorityIssues = await tx.issue.findMany({
-        where: {
-          projectId,
-          severity: { in: ['HIGH', 'CRITICAL'] },
-          status: { notIn: ['RESOLVED', 'CLOSED'] },
-        },
-        select: { id: true, title: true },
-      });
-      const planDeliverables = await tx.projectPlanTask.findMany({
-        where: { stage: { plan: { projectId } }, deliverableRequired: true },
-        select: {
-          id: true,
-          name: true,
-          documents: { where: { deletedAt: null, status: 'APPROVED' }, select: { id: true } },
-        },
-      });
-      const requiredDocuments = await tx.document.findMany({
-        where: { projectId, required: true, deletedAt: null, status: { not: 'APPROVED' } },
-        select: { id: true, name: true },
-      });
-      const missingRequiredDeliverables = [
-        ...planDeliverables
-          .filter((item) => item.documents.length === 0)
-          .map((item) => ({ id: item.id, name: item.name })),
-        ...requiredDocuments,
-      ];
-      return {
-        incompletePlanTasks,
-        incompleteTasks,
-        openHighPriorityIssues,
-        missingRequiredDeliverables,
-      };
+    return this.prisma.$transaction((tx) => this.closureBlockersWith(tx, projectId));
+  }
+  async close(projectId: string): Promise<CloseResult> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(
+          async (tx) => {
+            const project = await lockProject(tx, projectId);
+            if (!project) return { kind: 'not_found' };
+            if (!['ACTIVE', 'PAUSED'].includes(project.status))
+              return { kind: 'invalid_status', status: project.status };
+            const blockers = await this.closureBlockersWith(tx, projectId);
+            if (Object.values(blockers).some((items) => items.length > 0))
+              return { kind: 'blocked', blockers };
+            const closed = await tx.project.update({
+              where: { id: projectId },
+              data: {
+                status: 'COMPLETED',
+                actualGoLiveDate: project.actualGoLiveDate ?? new Date(),
+                progress: 100,
+              },
+            });
+            return { kind: 'closed', project: closed };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+      } catch (error) {
+        if (
+          attempt === 2 ||
+          !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+          error.code !== 'P2034'
+        )
+          throw error;
+      }
+    }
+    throw new Error('Unreachable project close retry state');
+  }
+  private async closureBlockersWith(tx: Prisma.TransactionClient, projectId: string) {
+    const incompletePlanTasks = await tx.projectPlanTask.findMany({
+      where: { stage: { plan: { projectId } }, required: true, progress: { lt: 100 } },
+      select: { id: true, name: true },
     });
+    const incompleteTasks = await tx.task.findMany({
+      where: { projectId, status: { notIn: ['DONE', 'CANCELLED'] } },
+      select: { id: true, title: true },
+    });
+    const openHighPriorityIssues = await tx.issue.findMany({
+      where: {
+        projectId,
+        severity: { in: ['HIGH', 'CRITICAL'] },
+        status: { notIn: ['RESOLVED', 'CLOSED'] },
+      },
+      select: { id: true, title: true },
+    });
+    const planDeliverables = await tx.projectPlanTask.findMany({
+      where: { stage: { plan: { projectId } }, deliverableRequired: true },
+      select: {
+        id: true,
+        name: true,
+        documents: { where: { deletedAt: null, status: 'APPROVED' }, select: { id: true } },
+      },
+    });
+    const requiredDocuments = await tx.document.findMany({
+      where: { projectId, required: true, deletedAt: null, status: { not: 'APPROVED' } },
+      select: { id: true, name: true },
+    });
+    const missingRequiredDeliverables = [
+      ...planDeliverables
+        .filter((item) => item.documents.length === 0)
+        .map((item) => ({ id: item.id, name: item.name })),
+      ...requiredDocuments,
+    ];
+    return {
+      incompletePlanTasks,
+      incompleteTasks,
+      openHighPriorityIssues,
+      missingRequiredDeliverables,
+    };
   }
   prismaClient() {
     return this.prisma;

@@ -5,6 +5,7 @@ import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProjectsService } from '../projects/projects.service';
+import { assertProjectWritable } from '../projects/project-mutation';
 import type { CreateIssueDto, IssueListQueryDto, UpdateIssueDto } from './dto';
 
 @Injectable()
@@ -60,14 +61,17 @@ export class IssuesService {
     await this.validateOwner(dto.projectId, dto.ownerUserId);
     const riskScore =
       dto.probability && dto.impact ? calculateRiskScore(dto.probability, dto.impact) : undefined;
-    const issue = await this.prisma.issue.create({
-      data: {
-        ...dto,
-        title: dto.title.trim(),
-        riskScore,
-        sourceType: dto.sourceType ?? 'MANUAL',
-        createdById: user.id,
-      },
+    const issue = await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, dto.projectId);
+      return tx.issue.create({
+        data: {
+          ...dto,
+          title: dto.title.trim(),
+          riskScore,
+          sourceType: dto.sourceType ?? 'MANUAL',
+          createdById: user.id,
+        },
+      });
     });
     await this.projects.recomputeHealth(dto.projectId);
     return issue;

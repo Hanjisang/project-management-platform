@@ -17,6 +17,8 @@ async function bootstrap(): Promise<void> {
   });
   app.useLogger(app.get(Logger));
   const config = app.get(ConfigService);
+  const trustProxyHops = config.get<number>('TRUST_PROXY_HOPS', 0);
+  if (trustProxyHops > 0) app.set('trust proxy', trustProxyHops);
   app.use(requestIdMiddleware);
   app.use(cookieParser());
   app.use(helmet({ contentSecurityPolicy: false }));
