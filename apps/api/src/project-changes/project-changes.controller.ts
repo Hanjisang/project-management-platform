@@ -15,6 +15,7 @@ import {
   DirectProjectAdjustmentDto,
   ProjectChangeDecisionDto,
 } from './dto';
+import { ProjectChangePostApplyService } from './project-change-post-apply.service';
 import { ProjectChangesService } from './project-changes.service';
 
 @ApiTags('Project Changes')
@@ -22,6 +23,7 @@ import { ProjectChangesService } from './project-changes.service';
 export class ProjectChangesController {
   constructor(
     private readonly service: ProjectChangesService,
+    private readonly postApply: ProjectChangePostApplyService,
     private readonly integrity: ExecutionIntegrityService,
   ) {}
   @Get('projects/:projectId/change-requests')
@@ -98,6 +100,7 @@ export class ProjectChangesController {
   @AuditAction('project.change.apply', 'ProjectChangeRequest')
   async apply(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     const result = await this.service.apply(user, id);
+    await this.postApply.process(result);
     await this.integrity.recomputeProject(result.projectId);
     return this.service.get(user, id);
   }
