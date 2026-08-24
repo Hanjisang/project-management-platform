@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref, toRef } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
 import { projectsApi } from '../../api/projects.api';
 import StatusTag from '../../components/StatusTag.vue';
@@ -7,12 +7,13 @@ import TaskExecutionDrawer from '../tasks/TaskExecutionDrawer.vue';
 import type { PlanStage, ProjectWorkItem } from '../../types/domain';
 
 const props = defineProps<{ projectId: string }>();
+const projectId = toRef(props, 'projectId');
 const drawer = ref(false);
 const selectedId = ref('');
 const execution = useQuery({
-  queryKey: ['project-execution', props.projectId],
+  queryKey: computed(() => ['project-execution', projectId.value]),
   queryFn: () =>
-    projectsApi.execution(props.projectId) as Promise<{
+    projectsApi.execution(projectId.value) as Promise<{
       plan?: { progress: number };
       stages: PlanStage[];
       attentionCounts: Record<string, number>;
