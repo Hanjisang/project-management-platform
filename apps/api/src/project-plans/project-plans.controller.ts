@@ -9,13 +9,17 @@ import {
   RequireProjectAccess,
 } from '../common/decorators';
 import type { RequestUser } from '../common/types';
+import { ExecutionIntegrityService } from './execution-integrity.service';
 import { GeneratePlanDto, SyncPlanDto } from './dto';
 import { ProjectPlansService } from './project-plans.service';
 
 @ApiTags('Project Plans')
 @Controller()
 export class ProjectPlansController {
-  constructor(private readonly service: ProjectPlansService) {}
+  constructor(
+    private readonly service: ProjectPlansService,
+    private readonly integrity: ExecutionIntegrityService,
+  ) {}
   @Get('projects/:projectId/plan')
   @RequirePermissions(PERMISSIONS.PLAN_VIEW)
   @RequireProjectAccess()
@@ -62,11 +66,12 @@ export class ProjectPlansController {
   @RequirePermissions(PERMISSIONS.PLAN_EDIT)
   @RequireProjectAccess()
   @AuditAction('plan.sync', 'ProjectPlan')
-  sync(
+  async sync(
     @CurrentUser() user: RequestUser,
     @Param('projectId') projectId: string,
     @Body() dto: SyncPlanDto,
   ) {
+    await this.integrity.assertSafeDirectSopSync(projectId);
     return this.service.sync(user, projectId, dto);
   }
 }
