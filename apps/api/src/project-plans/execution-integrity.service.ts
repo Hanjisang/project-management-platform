@@ -18,10 +18,16 @@ export class ExecutionIntegrityService {
     if (input.plannedStartDate === undefined && input.plannedGoLiveDate === undefined) return;
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
-      select: { status: true },
+      select: { status: true, plannedStartDate: true, plannedGoLiveDate: true },
     });
-    if (!project) return;
-    if (['ACTIVE', 'PAUSED'].includes(project.status))
+    if (!project || !['ACTIVE', 'PAUSED'].includes(project.status)) return;
+    const startChanged =
+      input.plannedStartDate !== undefined &&
+      input.plannedStartDate.getTime() !== project.plannedStartDate?.getTime();
+    const completionChanged =
+      input.plannedGoLiveDate !== undefined &&
+      input.plannedGoLiveDate.getTime() !== project.plannedGoLiveDate?.getTime();
+    if (startChanged || completionChanged)
       throw new ConflictException({
         code: 'PROJECT_CHANGE_APPROVAL_REQUIRED',
         message: '已启动项目的计划起止日期不能通过普通项目编辑修改，请使用计划调整或项目变更',
