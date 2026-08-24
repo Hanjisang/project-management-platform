@@ -19,7 +19,7 @@ describe('ProjectsRepository closure parity', () => {
       projectChangeRequest: { findMany: vi.fn().mockResolvedValue([]) },
     };
     const prisma = {
-      $transaction: vi.fn().mockImplementation(async (callback: (client: typeof tx) => unknown) =>
+      $transaction: vi.fn().mockImplementation((callback: (client: typeof tx) => unknown) =>
         callback(tx),
       ),
     } as unknown as PrismaService;
