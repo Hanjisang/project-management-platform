@@ -37,6 +37,29 @@ const uploadDialog = ref(false);
 const file = ref<File>();
 const version = ref('V1.0');
 
+function sourceLabel(value: string): string {
+  return {
+    SOP: 'SOP 任务',
+    MANUAL: '人工任务',
+    MESSAGE: '消息任务',
+    ISSUE: '问题任务',
+    ZENTAO: '禅道任务',
+    CHANGE: '变更新增',
+  }[value] ?? value;
+}
+function sourceTagType(value: string): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
+  return (
+    {
+      SOP: 'primary',
+      MESSAGE: 'success',
+      ISSUE: 'danger',
+      ZENTAO: 'info',
+      CHANGE: 'warning',
+      MANUAL: 'info',
+    }[value] ?? 'info'
+  ) as 'primary' | 'success' | 'warning' | 'info' | 'danger';
+}
+
 async function refresh(): Promise<void> {
   await Promise.all([
     client.invalidateQueries({ queryKey: ['task-detail', props.taskId] }),
@@ -130,22 +153,8 @@ async function completeTask(): Promise<void> {
     <template v-else-if="detail.data.value">
       <div class="task-head">
         <div>
-          <el-tag
-            :type="
-              detail.data.value.sourceType === 'SOP'
-                ? 'primary'
-                : detail.data.value.sourceType === 'CHANGE'
-                  ? 'warning'
-                  : 'info'
-            "
-          >
-            {{
-              detail.data.value.sourceType === 'SOP'
-                ? 'SOP 任务'
-                : detail.data.value.sourceType === 'CHANGE'
-                  ? '变更新增'
-                  : '人工任务'
-            }}
+          <el-tag :type="sourceTagType(String(detail.data.value.sourceType))">
+            {{ sourceLabel(String(detail.data.value.sourceType)) }}
           </el-tag>
           <h2>{{ detail.data.value.name }}</h2>
           <p class="muted">
@@ -166,7 +175,7 @@ async function completeTask(): Promise<void> {
             v-for="item in context.checklistItems"
             :key="item.id"
             :model-value="item.completed"
-            :disabled="!auth.has(PERMISSIONS.TASK_EDIT)"
+            :disabled="!(auth.has(PERMISSIONS.TASK_EDIT) || auth.has(PERMISSIONS.PLAN_EDIT))"
             @change="toggleChecklist(item.id, $event)"
             >{{ item.name }} <span v-if="item.required" class="danger-text">*</span></el-checkbox
           >
@@ -208,10 +217,7 @@ async function completeTask(): Promise<void> {
                 >{{ deliverable.documents[0].versions[0].fileName }}</a
               >
             </div>
-            <div
-              v-if="deliverable.documents[0]?.versions[0]?.reviews.length"
-              class="review-history"
-            >
+            <div v-if="deliverable.documents[0]?.versions[0]?.reviews.length" class="review-history">
               <div
                 v-for="reviewItem in deliverable.documents[0].versions[0].reviews"
                 :key="reviewItem.id"
@@ -221,17 +227,12 @@ async function completeTask(): Promise<void> {
                   <strong>{{ reviewItem.reviewType === 'AI' ? '历史 AI 审核' : '人工审核' }}</strong>
                   <StatusTag :value="reviewItem.status" />
                 </div>
-                <p v-if="reviewItem.score !== undefined" class="muted">
-                  评分：{{ reviewItem.score }}
-                </p>
+                <p v-if="reviewItem.score !== undefined" class="muted">评分：{{ reviewItem.score }}</p>
                 <p v-if="reviewItem.summary">{{ reviewItem.summary }}</p>
                 <ul v-if="reviewItem.findings.length">
                   <li v-for="finding in reviewItem.findings" :key="finding.id">
-                    <strong>{{ finding.title }}</strong
-                    >：{{ finding.description }}
-                    <span v-if="finding.suggestion" class="muted"
-                      >（建议：{{ finding.suggestion }}）</span
-                    >
+                    <strong>{{ finding.title }}</strong>：{{ finding.description }}
+                    <span v-if="finding.suggestion" class="muted">（建议：{{ finding.suggestion }}）</span>
                   </li>
                 </ul>
               </div>
@@ -260,34 +261,17 @@ async function completeTask(): Promise<void> {
                   auth.has(PERMISSIONS.DOCUMENT_REVIEW)
                 "
               >
-                <el-button
-                  size="small"
-                  type="success"
-                  @click="review(deliverable.documents[0].id, 'APPROVED')"
-                  >通过</el-button
-                >
-                <el-button
-                  size="small"
-                  type="danger"
-                  @click="review(deliverable.documents[0].id, 'REJECTED')"
-                  >驳回</el-button
-                >
+                <el-button size="small" type="success" @click="review(deliverable.documents[0].id, 'APPROVED')">通过</el-button>
+                <el-button size="small" type="danger" @click="review(deliverable.documents[0].id, 'REJECTED')">驳回</el-button>
               </template>
             </div>
           </article>
-          <el-empty
-            v-if="!context.deliverables.length"
-            description="无交付物要求"
-            :image-size="64"
-          />
+          <el-empty v-if="!context.deliverables.length" description="无交付物要求" :image-size="64" />
         </section>
       </template>
       <div class="drawer-footer">
         <el-button
-          v-if="
-            auth.has(PERMISSIONS.TASK_COMPLETE) &&
-            !['DONE', 'CANCELLED'].includes(detail.data.value.status)
-          "
+          v-if="auth.has(PERMISSIONS.TASK_COMPLETE) && !['DONE', 'CANCELLED'].includes(detail.data.value.status)"
           type="success"
           @click="completeTask"
           >完成任务</el-button
@@ -298,21 +282,16 @@ async function completeTask(): Promise<void> {
   <el-dialog v-model="uploadDialog" title="上传交付物" width="min(520px, 94vw)" append-to-body>
     <el-form label-position="top">
       <el-form-item label="版本号"><el-input v-model.trim="version" /></el-form-item>
-      <el-form-item label="文件"
-        ><el-upload
-          :auto-upload="false"
-          :limit="1"
-          :on-change="(item: { raw?: File }) => (file = item.raw)"
-          ><el-button>选择文件</el-button></el-upload
-        ></el-form-item
-      >
+      <el-form-item label="文件">
+        <el-upload :auto-upload="false" :limit="1" :on-change="(item: { raw?: File }) => (file = item.raw)">
+          <el-button>选择文件</el-button>
+        </el-upload>
+      </el-form-item>
     </el-form>
-    <template #footer
-      ><el-button @click="uploadDialog = false">取消</el-button
-      ><el-button type="primary" :disabled="!file || !version" @click="upload"
-        >上传</el-button
-      ></template
-    >
+    <template #footer>
+      <el-button @click="uploadDialog = false">取消</el-button>
+      <el-button type="primary" :disabled="!file || !version" @click="upload">上传</el-button>
+    </template>
   </el-dialog>
 </template>
 
@@ -325,51 +304,15 @@ async function completeTask(): Promise<void> {
   justify-content: space-between;
   gap: 12px;
 }
-.task-head h2 {
-  margin: 8px 0;
-}
-.execution-section {
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-.execution-section > .el-checkbox {
-  display: flex;
-  margin: 10px 0;
-}
-.deliverable-card {
-  margin-top: 12px;
-  padding: 14px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-}
-.review-history {
-  margin-top: 12px;
-}
-.review-card {
-  padding: 10px;
-  margin-top: 8px;
-  border-radius: 6px;
-  background: var(--el-fill-color-light);
-}
-.links {
-  margin-top: 10px;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.actions {
-  justify-content: flex-start;
-  margin-top: 12px;
-}
-.drawer-footer {
-  margin-top: 24px;
-  text-align: right;
-}
-.muted {
-  color: var(--el-text-color-secondary);
-}
-.danger-text {
-  color: var(--el-color-danger);
-}
+.task-head h2 { margin: 8px 0; }
+.execution-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--el-border-color-lighter); }
+.execution-section > .el-checkbox { display: flex; margin: 10px 0; }
+.deliverable-card { margin-top: 12px; padding: 14px; border: 1px solid var(--el-border-color); border-radius: 8px; }
+.review-history { margin-top: 12px; }
+.review-card { padding: 10px; margin-top: 8px; border-radius: 6px; background: var(--el-fill-color-light); }
+.links { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+.actions { justify-content: flex-start; margin-top: 12px; }
+.drawer-footer { margin-top: 24px; text-align: right; }
+.muted { color: var(--el-text-color-secondary); }
+.danger-text { color: var(--el-color-danger); }
 </style>
