@@ -5,12 +5,13 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { PERMISSIONS } from '@pmp/shared-constants';
 import { projectsApi } from '../../api/projects.api';
 import { sopApi } from '../../api/sop.api';
+import { documentsApi } from '../../api/documents.api';
 import { useAuthStore } from '../../stores/auth';
 import { ApiError } from '../../api/client';
 import { projectQueryKey } from '../../composables/project-query';
 import StatusTag from '../../components/StatusTag.vue';
 import TaskExecutionDrawer from '../tasks/TaskExecutionDrawer.vue';
-import type { ProjectWorkItem } from '../../types/domain';
+import type { DocumentRecord, ProjectDeliverable, ProjectWorkItem } from '../../types/domain';
 
 const props = defineProps<{ projectId: string }>();
 const projectId = toRef(props, 'projectId');
@@ -20,6 +21,12 @@ const selectedVersion = ref('');
 const syncDialog = ref(false);
 const drawer = ref(false);
 const selectedTaskId = ref('');
+const uploadDialog = ref(false);
+const selectedDeliverable = ref<ProjectDeliverable>();
+const selectedDocumentId = ref('');
+const documentName = ref('');
+const uploadVersion = ref('V1.0');
+const uploadFile = ref<File>();
 const preview = ref<{
   diff: Array<{ operation: string; entity: string; path: string }>;
   diffHash: string;
@@ -38,15 +45,22 @@ const generate = useMutation({
   mutationFn: () => projectsApi.generatePlan(projectId.value, selectedVersion.value),
   onSuccess: async () => {
     ElMessage.success('实施计划已生成');
-    await Promise.all([
-      client.invalidateQueries({ queryKey: ['project-plan', projectId.value] }),
-      client.invalidateQueries({ queryKey: ['project-execution', projectId.value] }),
-      client.invalidateQueries({ queryKey: ['tasks'] }),
-    ]);
+    await refreshExecutionData();
   },
   onError: (error: Error) => ElMessage.error(error.message),
 });
 
+async function refreshExecutionData(): Promise<void> {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: ['project-plan', projectId.value] }),
+    client.invalidateQueries({ queryKey: ['project-execution', projectId.value] }),
+    client.invalidateQueries({ queryKey: ['project', projectId.value] }),
+    client.invalidateQueries({ queryKey: ['tasks'] }),
+    client.invalidateQueries({ queryKey: ['task-detail'] }),
+    client.invalidateQueries({ queryKey: ['documents'] }),
+    client.invalidateQueries({ queryKey: ['dashboard'] }),
+  ]);
+}
 async function showSync(): Promise<void> {
   if (!selectedVersion.value) return;
   try {
@@ -70,12 +84,7 @@ async function applySync(): Promise<void> {
     await projectsApi.syncPlan(projectId.value, selectedVersion.value, preview.value.diffHash);
     ElMessage.success('SOP 同步已应用');
     syncDialog.value = false;
-    await Promise.all([
-      client.invalidateQueries({ queryKey: ['project-plan', projectId.value] }),
-      client.invalidateQueries({ queryKey: ['project-execution', projectId.value] }),
-      client.invalidateQueries({ queryKey: ['tasks'] }),
-      client.invalidateQueries({ queryKey: ['dashboard'] }),
-    ]);
+    await refreshExecutionData();
   } catch (error) {
     ElMessage.error((error as Error).message);
   }
@@ -83,17 +92,57 @@ async function applySync(): Promise<void> {
 async function toggleChecklist(id: string, completed: unknown): Promise<void> {
   try {
     await projectsApi.completeChecklist(id, Boolean(completed));
-    await Promise.all([
-      client.invalidateQueries({ queryKey: ['project-plan', projectId.value] }),
-      client.invalidateQueries({ queryKey: ['project-execution', projectId.value] }),
-      client.invalidateQueries({ queryKey: ['project', projectId.value] }),
-      client.invalidateQueries({ queryKey: ['tasks'] }),
-      client.invalidateQueries({ queryKey: ['task-detail'] }),
-      client.invalidateQueries({ queryKey: ['dashboard'] }),
-    ]);
+    await refreshExecutionData();
   } catch (error) {
     ElMessage.error((error as Error).message);
   }
+}
+function nextVersion(document?: DocumentRecord): string {
+  const latest = document?.versions
+    .map((item) => /^V?(\d+)\.(\d+)$/.exec(item.version))
+    .filter((item): item is RegExpExecArray => Boolean(item))
+    .sort((a, b) => Number(b[1]) - Number(a[1]) || Number(b[2]) - Number(a[2]))[0];
+  return latest ? `V${latest[1]}.${Number(latest[2]) + 1}` : 'V1.0';
+}
+function openUpload(deliverable: ProjectDeliverable): void {
+  const document = deliverable.documents[0];
+  selectedDeliverable.value = deliverable;
+  selectedDocumentId.value = document?.id ?? '';
+  documentName.value = document?.name ?? deliverable.name;
+  uploadVersion.value = nextVersion(document);
+  uploadFile.value = undefined;
+  uploadDialog.value = true;
+}
+async function uploadDeliverable(): Promise<void> {
+  if (!selectedDeliverable.value || !uploadFile.value) return;
+  const form = new FormData();
+  form.set('file', uploadFile.value);
+  form.set('version', uploadVersion.value);
+  if (selectedDocumentId.value) {
+    await documentsApi.addVersion(selectedDocumentId.value, form);
+  } else {
+    form.set('name', documentName.value.trim() || selectedDeliverable.value.name);
+    form.set('description', selectedDeliverable.value.description ?? '');
+    await documentsApi.uploadForDeliverable(selectedDeliverable.value.id, form);
+  }
+  uploadDialog.value = false;
+  ElMessage.success(selectedDocumentId.value ? '交付物新版本已上传' : '交付物已上传');
+  await refreshExecutionData();
+}
+async function reviewDeliverable(
+  documentId: string,
+  status: 'APPROVED' | 'REJECTED',
+): Promise<void> {
+  let comment = '';
+  if (status === 'REJECTED') {
+    const response = await ElMessageBox.prompt('请输入驳回原因', '驳回交付物', {
+      inputValidator: (value) => Boolean(value) || '请输入原因',
+    });
+    comment = response.value;
+  }
+  await documentsApi.review(documentId, status, comment);
+  ElMessage.success(status === 'APPROVED' ? '交付物审核通过' : '交付物已驳回');
+  await refreshExecutionData();
 }
 function openTask(task: ProjectWorkItem): void {
   selectedTaskId.value = task.id;
@@ -106,7 +155,7 @@ function openTask(task: ProjectWorkItem): void {
     <div class="filters plan-toolbar">
       <div>
         <strong>计划结构</strong>
-        <p class="muted">SOP 负责生成计划结构；检查项可在计划中直接执行，完整任务与交付物在任务抽屉处理。</p>
+        <p class="muted">SOP 负责生成计划结构；检查项和交付物可直接在计划中执行，任务抽屉提供完整详情。</p>
       </div>
       <div class="filter-row">
         <el-select
@@ -184,6 +233,7 @@ function openTask(task: ProjectWorkItem): void {
           <el-progress :percentage="task.progress" :stroke-width="7" />
           <StatusTag :value="task.status" />
           <el-button link type="primary" @click="openTask(task)">打开任务</el-button>
+
           <div v-if="task.checklistItems.length" class="checklist-inline">
             <el-checkbox
               v-for="item in task.checklistItems"
@@ -194,6 +244,63 @@ function openTask(task: ProjectWorkItem): void {
             >
               {{ item.name }}<span v-if="item.required" class="required-mark"> *</span>
             </el-checkbox>
+          </div>
+
+          <div v-if="task.deliverables.length" class="deliverables-inline">
+            <article
+              v-for="deliverable in task.deliverables"
+              :key="deliverable.id"
+              class="project-deliverable-card"
+            >
+              <div class="deliverable-header">
+                <div>
+                  <strong>{{ deliverable.name }}</strong>
+                  <el-tag size="small" :type="deliverable.required ? 'danger' : 'info'" effect="plain">
+                    {{ deliverable.required ? '必交' : '可选' }}
+                  </el-tag>
+                </div>
+                <StatusTag :value="deliverable.effectiveStatus" />
+              </div>
+              <p v-if="deliverable.description" class="muted">{{ deliverable.description }}</p>
+              <div v-if="deliverable.templates.length" class="deliverable-links">
+                <span class="muted">标准模板：</span>
+                <a
+                  v-for="template in deliverable.templates"
+                  :key="template.id"
+                  :href="projectsApi.deliverableTemplateDownloadUrl(template.id)"
+                >{{ template.fileName }}</a>
+              </div>
+              <div v-if="deliverable.documents[0]?.versions[0]" class="deliverable-links">
+                <span class="muted">当前文件：</span>
+                <a :href="documentsApi.downloadUrl(deliverable.documents[0].versions[0].id)">
+                  {{ deliverable.documents[0].versions[0].fileName }}
+                </a>
+              </div>
+              <div class="deliverable-actions">
+                <el-button
+                  v-if="auth.has(PERMISSIONS.DOCUMENT_UPLOAD)"
+                  size="small"
+                  @click="openUpload(deliverable)"
+                >{{ deliverable.documents[0] ? '上传新版本' : '上传交付物' }}</el-button>
+                <template
+                  v-if="
+                    deliverable.documents[0]?.status === 'PENDING_REVIEW' &&
+                    auth.has(PERMISSIONS.DOCUMENT_REVIEW)
+                  "
+                >
+                  <el-button
+                    size="small"
+                    type="success"
+                    @click="reviewDeliverable(deliverable.documents[0].id, 'APPROVED')"
+                  >通过</el-button>
+                  <el-button
+                    size="small"
+                    type="danger"
+                    @click="reviewDeliverable(deliverable.documents[0].id, 'REJECTED')"
+                  >驳回</el-button>
+                </template>
+              </div>
+            </article>
           </div>
         </div>
       </article>
@@ -218,6 +325,34 @@ function openTask(task: ProjectWorkItem): void {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="uploadDialog" title="上传实际交付物" width="min(560px,94vw)" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="文档名称" required>
+          <el-input v-model.trim="documentName" :disabled="Boolean(selectedDocumentId)" />
+        </el-form-item>
+        <el-form-item label="版本号" required>
+          <el-input v-model.trim="uploadVersion" />
+        </el-form-item>
+        <el-form-item label="文件" required>
+          <el-upload
+            :auto-upload="false"
+            :limit="1"
+            :on-change="(item: { raw?: File }) => (uploadFile = item.raw)"
+          >
+            <el-button>选择文件</el-button>
+          </el-upload>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="uploadDialog = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!uploadFile || !uploadVersion || (!selectedDocumentId && !documentName)"
+          @click="uploadDeliverable"
+        >上传</el-button>
+      </template>
+    </el-dialog>
+
     <TaskExecutionDrawer v-model="drawer" :task-id="selectedTaskId" />
   </div>
 </template>
@@ -225,12 +360,18 @@ function openTask(task: ProjectWorkItem): void {
 <style scoped>
 .plan-toolbar,
 .plan-summary,
-.plan-stage-header {
+.plan-stage-header,
+.deliverable-header,
+.deliverable-actions,
+.deliverable-links {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
 }
+.plan-toolbar,
+.plan-summary,
+.plan-stage-header,
+.deliverable-header { justify-content: space-between; }
 .plan-toolbar { margin-bottom: 14px; }
 .plan-toolbar p { margin: 4px 0 0; }
 .plan-summary { margin-bottom: 12px; }
@@ -244,8 +385,9 @@ function openTask(task: ProjectWorkItem): void {
   padding: 10px 0;
   border-top: 1px solid var(--border);
 }
+.checklist-inline,
+.deliverables-inline { grid-column: 1 / -1; }
 .checklist-inline {
-  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   gap: 6px 18px;
@@ -254,6 +396,18 @@ function openTask(task: ProjectWorkItem): void {
   background: var(--el-fill-color-lighter);
 }
 .checklist-inline .el-checkbox { margin-right: 0; }
+.deliverables-inline { display: grid; gap: 8px; }
+.project-deliverable-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.deliverable-header > div { display: flex; align-items: center; gap: 8px; }
+.deliverable-header strong { margin: 0; }
+.project-deliverable-card p { margin: 6px 0 0; }
+.deliverable-links { justify-content: flex-start; flex-wrap: wrap; margin-top: 8px; gap: 8px; }
+.deliverable-actions { justify-content: flex-start; margin-top: 10px; gap: 8px; }
 .required-mark { color: var(--el-color-danger); }
 .task-meta { margin-top: 4px; font-size: 12px; }
 .muted { color: var(--el-text-color-secondary); }
@@ -262,6 +416,8 @@ function openTask(task: ProjectWorkItem): void {
   .compact-task { grid-template-columns: 1fr 100px; }
   .compact-task > span,
   .compact-task > .el-progress { display: none; }
-  .checklist-inline { grid-column: 1 / -1; }
+  .checklist-inline,
+  .deliverables-inline { grid-column: 1 / -1; }
+  .deliverable-header { align-items: flex-start; }
 }
 </style>
