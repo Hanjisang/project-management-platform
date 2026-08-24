@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, toRef } from 'vue';
+import { computed, reactive, ref, toRef } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { PERMISSIONS } from '@pmp/shared-constants';
@@ -11,7 +11,12 @@ import { ApiError } from '../../api/client';
 import { projectQueryKey } from '../../composables/project-query';
 import StatusTag from '../../components/StatusTag.vue';
 import TaskExecutionDrawer from '../tasks/TaskExecutionDrawer.vue';
-import type { DocumentRecord, ProjectDeliverable, ProjectWorkItem } from '../../types/domain';
+import type {
+  DocumentRecord,
+  ProjectDeliverable,
+  ProjectWorkItem,
+  UserRef,
+} from '../../types/domain';
 
 const props = defineProps<{ projectId: string }>();
 const projectId = toRef(props, 'projectId');
@@ -27,6 +32,10 @@ const selectedDocumentId = ref('');
 const documentName = ref('');
 const uploadVersion = ref('V1.0');
 const uploadFile = ref<File>();
+const editTaskDialog = ref(false);
+const editingTaskId = ref('');
+const memberOptions = ref<UserRef[]>([]);
+const editTaskForm = reactive({ ownerUserId: '', plannedStartDate: '', plannedEndDate: '' });
 const preview = ref<{
   diff: Array<{ operation: string; entity: string; path: string }>;
   diffHash: string;
@@ -92,6 +101,35 @@ async function applySync(): Promise<void> {
 async function toggleChecklist(id: string, completed: unknown): Promise<void> {
   try {
     await projectsApi.completeChecklist(id, Boolean(completed));
+    await refreshExecutionData();
+  } catch (error) {
+    ElMessage.error((error as Error).message);
+  }
+}
+async function openTaskEdit(task: ProjectWorkItem): Promise<void> {
+  editingTaskId.value = task.id;
+  Object.assign(editTaskForm, {
+    ownerUserId: task.owner?.id ?? '',
+    plannedStartDate: task.plannedStartDate?.slice(0, 10) ?? '',
+    plannedEndDate: task.plannedEndDate?.slice(0, 10) ?? '',
+  });
+  try {
+    const members = await projectsApi.members(projectId.value);
+    memberOptions.value = members.members?.map((item) => item.user) ?? [];
+    editTaskDialog.value = true;
+  } catch (error) {
+    ElMessage.error((error as Error).message);
+  }
+}
+async function saveTaskPlan(): Promise<void> {
+  try {
+    await projectsApi.updatePlanTask(editingTaskId.value, {
+      ownerUserId: editTaskForm.ownerUserId || undefined,
+      plannedStartDate: editTaskForm.plannedStartDate || undefined,
+      plannedEndDate: editTaskForm.plannedEndDate || undefined,
+    });
+    editTaskDialog.value = false;
+    ElMessage.success('任务计划已更新');
     await refreshExecutionData();
   } catch (error) {
     ElMessage.error((error as Error).message);
@@ -232,14 +270,21 @@ function openTask(task: ProjectWorkItem): void {
           <span>交付物 {{ task.deliverableSummary?.approved ?? 0 }}/{{ task.deliverableSummary?.total ?? 0 }}</span>
           <el-progress :percentage="task.progress" :stroke-width="7" />
           <StatusTag :value="task.status" />
-          <el-button link type="primary" @click="openTask(task)">打开任务</el-button>
+          <div class="task-actions">
+            <el-button
+              v-if="auth.has(PERMISSIONS.PLAN_EDIT) || auth.has(PERMISSIONS.TASK_EDIT)"
+              link
+              @click="openTaskEdit(task)"
+            >编辑计划</el-button>
+            <el-button link type="primary" @click="openTask(task)">打开任务</el-button>
+          </div>
 
           <div v-if="task.checklistItems.length" class="checklist-inline">
             <el-checkbox
               v-for="item in task.checklistItems"
               :key="item.id"
               :model-value="item.completed"
-              :disabled="!auth.has(PERMISSIONS.TASK_EDIT)"
+              :disabled="!(auth.has(PERMISSIONS.TASK_EDIT) || auth.has(PERMISSIONS.PLAN_EDIT))"
               @change="toggleChecklist(item.id, $event)"
             >
               {{ item.name }}<span v-if="item.required" class="required-mark"> *</span>
@@ -305,6 +350,43 @@ function openTask(task: ProjectWorkItem): void {
         </div>
       </article>
     </div>
+
+    <el-dialog v-model="editTaskDialog" title="编辑任务计划" width="min(560px,94vw)" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="负责人">
+          <el-select v-model="editTaskForm.ownerUserId" clearable style="width: 100%">
+            <el-option
+              v-for="member in memberOptions"
+              :key="member.id"
+              :label="member.displayName"
+              :value="member.id"
+            />
+          </el-select>
+        </el-form-item>
+        <div class="content-grid">
+          <el-form-item label="计划开始">
+            <el-date-picker
+              v-model="editTaskForm.plannedStartDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item label="计划结束">
+            <el-date-picker
+              v-model="editTaskForm.plannedEndDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width: 100%"
+            />
+          </el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="editTaskDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveTaskPlan">保存</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="syncDialog" title="SOP 同步差异" width="min(760px,95vw)">
       <el-alert
@@ -379,12 +461,13 @@ function openTask(task: ProjectWorkItem): void {
 .plan-stage-header { margin-bottom: 10px; }
 .compact-task {
   display: grid;
-  grid-template-columns: minmax(220px, 2fr) 120px 110px minmax(120px, 1fr) 100px 80px;
+  grid-template-columns: minmax(220px, 2fr) 120px 110px minmax(120px, 1fr) 100px minmax(150px, auto);
   gap: 12px;
   align-items: center;
   padding: 10px 0;
   border-top: 1px solid var(--border);
 }
+.task-actions { display: flex; align-items: center; gap: 4px; }
 .checklist-inline,
 .deliverables-inline { grid-column: 1 / -1; }
 .checklist-inline {
@@ -413,7 +496,7 @@ function openTask(task: ProjectWorkItem): void {
 .muted { color: var(--el-text-color-secondary); }
 @media (max-width: 900px) {
   .plan-toolbar { align-items: flex-start; flex-direction: column; }
-  .compact-task { grid-template-columns: 1fr 100px; }
+  .compact-task { grid-template-columns: 1fr 130px; }
   .compact-task > span,
   .compact-task > .el-progress { display: none; }
   .checklist-inline,
