@@ -116,7 +116,9 @@ test('H — dashboard keeps legacy metrics beside the new execution workspace', 
   await expect(page.getByText('正常项目', { exact: true })).toBeVisible();
   await expect(page.getByText('待确认消息', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '项目进度排行', level: 3 })).toBeVisible();
-  await expect(page.getByRole('link', { name: new RegExp(`${projectName}$`) })).toBeVisible();
+  const projectCard = page.locator('.my-project-grid .project-card').filter({ hasText: projectName });
+  await expect(projectCard).toHaveCount(1);
+  await expect(projectCard.getByRole('heading', { name: projectName, level: 3 })).toBeVisible();
 });
 
 test('I — implementation plan edits the same WorkItem owner and schedule directly', async ({ page }) => {
