@@ -137,6 +137,7 @@ test('I — implementation plan edits the same WorkItem owner and schedule direc
     .filter({ hasText: '计划结束' })
     .locator('input')
     .fill('2026-02-10');
+  await page.keyboard.press('Escape');
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(task).toContainText('2026-02-01 至 2026-02-10');
 
