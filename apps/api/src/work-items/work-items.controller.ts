@@ -54,11 +54,14 @@ export class WorkItemsController {
     @Param('projectId') projectId: string,
     @Body() dto: CreateWorkItemDto,
   ) {
-    if (!dto.planStageId && !dto.parentWorkItemId) {
+    const required = dto.required ?? false;
+    await this.integrity.assertDirectWorkItemCreationAllowed(projectId, required);
+    const normalized = { ...dto, required };
+    if (!normalized.planStageId && !normalized.parentWorkItemId) {
       const planStageId = await this.integrity.ensureManualStage(projectId);
-      return this.service.create(user, projectId, { ...dto, planStageId });
+      return this.service.create(user, projectId, { ...normalized, planStageId });
     }
-    return this.service.create(user, projectId, dto);
+    return this.service.create(user, projectId, normalized);
   }
 
   @Patch('work-items/:id')
@@ -82,11 +85,12 @@ export class WorkItemsController {
   @Post('work-items/:id/cancel')
   @RequirePermissions(PERMISSIONS.TASK_EDIT)
   @AuditAction('work-item.cancel', 'ProjectWorkItem')
-  cancel(
+  async cancel(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body() dto: CancelWorkItemDto,
   ) {
+    await this.integrity.assertDirectWorkItemCancellationAllowed(id);
     return this.service.cancel(user, id, dto);
   }
 
