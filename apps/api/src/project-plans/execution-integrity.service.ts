@@ -1,5 +1,6 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { RequestUser } from '../common/types';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertProjectWritable } from '../projects/project-mutation';
 import { ProgressService } from './progress.service';
@@ -34,29 +35,56 @@ export class ExecutionIntegrityService {
       });
   }
 
-  async assertDirectWorkItemCreationAllowed(projectId: string, required: boolean): Promise<void> {
-    if (!required) return;
+  async assertDirectWorkItemCreationAllowed(
+    user: RequestUser,
+    projectId: string,
+    required: boolean,
+  ): Promise<void> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
-      select: { status: true },
+      select: { status: true, managerUserId: true },
     });
-    if (project && ['ACTIVE', 'PAUSED'].includes(project.status))
+    if (!project || !['ACTIVE', 'PAUSED'].includes(project.status)) return;
+    if (required)
       throw new ConflictException({
         code: 'PROJECT_CHANGE_APPROVAL_REQUIRED',
         message: '已启动项目新增必需任务属于范围变更，请通过项目变更申请处理',
       });
+    this.assertProjectManager(user, project.managerUserId);
   }
 
-  async assertDirectWorkItemCancellationAllowed(workItemId: string): Promise<void> {
+  async assertDirectWorkItemUpdateAllowed(
+    user: RequestUser,
+    workItemId: string,
+    planningChanged: boolean,
+  ): Promise<void> {
+    if (!planningChanged) return;
     const item = await this.prisma.projectWorkItem.findUnique({
       where: { id: workItemId },
-      select: { required: true, project: { select: { status: true } } },
+      select: { project: { select: { status: true, managerUserId: true } } },
     });
-    if (item?.required && ['ACTIVE', 'PAUSED'].includes(item.project.status))
+    if (!item || !['ACTIVE', 'PAUSED'].includes(item.project.status)) return;
+    this.assertProjectManager(user, item.project.managerUserId);
+  }
+
+  async assertDirectWorkItemCancellationAllowed(
+    user: RequestUser,
+    workItemId: string,
+  ): Promise<void> {
+    const item = await this.prisma.projectWorkItem.findUnique({
+      where: { id: workItemId },
+      select: {
+        required: true,
+        project: { select: { status: true, managerUserId: true } },
+      },
+    });
+    if (!item || !['ACTIVE', 'PAUSED'].includes(item.project.status)) return;
+    if (item.required)
       throw new ConflictException({
         code: 'PROJECT_CHANGE_APPROVAL_REQUIRED',
         message: '已启动项目取消必需任务属于范围变更，请通过项目变更申请处理',
       });
+    this.assertProjectManager(user, item.project.managerUserId);
   }
 
   async assertSafeDirectSopSync(projectId: string): Promise<void> {
@@ -137,5 +165,13 @@ export class ExecutionIntegrityService {
       if (stage.workItems.length === 0) await this.progress.recomputeStage(stage.id);
     }
     await this.progress.recomputePlan(plan.id);
+  }
+
+  private assertProjectManager(user: RequestUser, managerUserId: string): void {
+    if (user.isAdministrator || user.id === managerUserId) return;
+    throw new ForbiddenException({
+      code: 'PROJECT_CHANGE_MANAGER_REQUIRED',
+      message: '已启动项目的一般计划调整只能由项目经理执行',
+    });
   }
 }
