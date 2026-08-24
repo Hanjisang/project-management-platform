@@ -55,7 +55,7 @@ export class WorkItemsController {
     @Body() dto: CreateWorkItemDto,
   ) {
     const required = dto.required ?? false;
-    await this.integrity.assertDirectWorkItemCreationAllowed(projectId, required);
+    await this.integrity.assertDirectWorkItemCreationAllowed(user, projectId, required);
     const normalized = { ...dto, required };
     if (!normalized.planStageId && !normalized.parentWorkItemId) {
       const planStageId = await this.integrity.ensureManualStage(projectId);
@@ -67,11 +67,21 @@ export class WorkItemsController {
   @Patch('work-items/:id')
   @RequirePermissions(PERMISSIONS.TASK_EDIT)
   @AuditAction('work-item.update', 'ProjectWorkItem')
-  update(
+  async update(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body() dto: UpdateWorkItemDto,
   ) {
+    const planningFields: Array<keyof UpdateWorkItemDto> = [
+      'name',
+      'description',
+      'ownerUserId',
+      'priority',
+      'plannedStartDate',
+      'plannedEndDate',
+    ];
+    const planningChanged = planningFields.some((key) => dto[key] !== undefined);
+    await this.integrity.assertDirectWorkItemUpdateAllowed(user, id, planningChanged);
     return this.service.update(user, id, dto);
   }
 
@@ -90,7 +100,7 @@ export class WorkItemsController {
     @Param('id') id: string,
     @Body() dto: CancelWorkItemDto,
   ) {
-    await this.integrity.assertDirectWorkItemCancellationAllowed(id);
+    await this.integrity.assertDirectWorkItemCancellationAllowed(user, id);
     return this.service.cancel(user, id, dto);
   }
 
