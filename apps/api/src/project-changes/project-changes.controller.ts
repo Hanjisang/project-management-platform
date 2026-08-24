@@ -8,6 +8,7 @@ import {
   RequireProjectAccess,
 } from '../common/decorators';
 import type { RequestUser } from '../common/types';
+import { ExecutionIntegrityService } from '../project-plans/execution-integrity.service';
 import {
   ChangePreflightDto,
   CreateProjectChangeDto,
@@ -19,7 +20,10 @@ import { ProjectChangesService } from './project-changes.service';
 @ApiTags('Project Changes')
 @Controller()
 export class ProjectChangesController {
-  constructor(private readonly service: ProjectChangesService) {}
+  constructor(
+    private readonly service: ProjectChangesService,
+    private readonly integrity: ExecutionIntegrityService,
+  ) {}
   @Get('projects/:projectId/change-requests')
   @RequirePermissions(PERMISSIONS.PROJECT_CHANGE_VIEW)
   @RequireProjectAccess()
@@ -92,7 +96,9 @@ export class ProjectChangesController {
   @Post('change-requests/:id/apply')
   @RequirePermissions(PERMISSIONS.PROJECT_CHANGE_APPLY)
   @AuditAction('project.change.apply', 'ProjectChangeRequest')
-  apply(@CurrentUser() user: RequestUser, @Param('id') id: string) {
-    return this.service.apply(user, id);
+  async apply(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    const result = await this.service.apply(user, id);
+    await this.integrity.recomputeProject(result.projectId);
+    return this.service.get(user, id);
   }
 }
