@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { DeliverableReviewDecisionService } from '../documents/deliverable-review-decision.service';
+import { ProjectPlansModule } from '../project-plans/project-plans.module';
 import { ProjectUserOptionsController, ProjectsController } from './projects.controller';
 import { ProjectsRepository } from './projects.repository';
 import { ProjectsService } from './projects.service';
-import { DeliverableReviewDecisionService } from '../documents/deliverable-review-decision.service';
+
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, ProjectPlansModule],
   controllers: [ProjectsController, ProjectUserOptionsController],
   providers: [ProjectsRepository, ProjectsService, DeliverableReviewDecisionService],
   exports: [ProjectsService, ProjectsRepository],
