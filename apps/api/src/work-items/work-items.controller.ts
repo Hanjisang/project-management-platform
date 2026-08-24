@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { PERMISSIONS } from '@pmp/shared-constants';
 import {
   AuditAction,
   CurrentUser,
+  RequireAnyPermission,
   RequirePermissions,
   RequireProjectAccess,
 } from '../common/decorators';
@@ -65,13 +66,30 @@ export class WorkItemsController {
   }
 
   @Patch('work-items/:id')
-  @RequirePermissions(PERMISSIONS.TASK_EDIT)
+  @RequireAnyPermission(PERMISSIONS.TASK_EDIT, PERMISSIONS.PLAN_EDIT)
   @AuditAction('work-item.update', 'ProjectWorkItem')
   async update(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body() dto: UpdateWorkItemDto,
   ) {
+    const hasTaskEdit = user.isAdministrator || user.permissions.includes(PERMISSIONS.TASK_EDIT);
+    if (!hasTaskEdit) {
+      const planCompatibleFields = new Set<keyof UpdateWorkItemDto>([
+        'ownerUserId',
+        'plannedStartDate',
+        'plannedEndDate',
+      ]);
+      const forbidden = (Object.keys(dto) as Array<keyof UpdateWorkItemDto>).filter(
+        (key) => !planCompatibleFields.has(key),
+      );
+      if (forbidden.length)
+        throw new ForbiddenException({
+          code: 'PLAN_EDIT_SCOPE_EXCEEDED',
+          message: '计划编辑权限仅允许调整任务负责人和计划起止日期',
+          details: { forbiddenFields: forbidden },
+        });
+    }
     const planningFields: Array<keyof UpdateWorkItemDto> = [
       'name',
       'description',
@@ -105,7 +123,7 @@ export class WorkItemsController {
   }
 
   @Patch('work-item-checklist/:id')
-  @RequirePermissions(PERMISSIONS.TASK_EDIT)
+  @RequireAnyPermission(PERMISSIONS.TASK_EDIT, PERMISSIONS.PLAN_EDIT)
   @AuditAction('work-item.checklist.update', 'ProjectChecklistItem')
   checklist(
     @CurrentUser() user: RequestUser,
