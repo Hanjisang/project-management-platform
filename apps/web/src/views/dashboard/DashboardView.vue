@@ -37,7 +37,7 @@ const metrics = [
 
 <template>
   <div>
-    <PageHeader title="我的项目" description="优先展示自己负责或参与项目的执行状态与异常事项" />
+    <PageHeader title="管理驾驶舱" description="我的项目优先展示自己负责或参与项目的执行状态与异常事项" />
     <el-skeleton v-if="query.isLoading.value" :rows="10" animated />
     <el-result
       v-else-if="query.isError.value"
