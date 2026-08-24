@@ -281,43 +281,61 @@ export class ProjectsRepository {
     throw new Error('Unreachable project close retry state');
   }
   private async closureBlockersWith(tx: Prisma.TransactionClient, projectId: string) {
-    const incompleteWorkItems = await tx.projectWorkItem.findMany({
-      where: { projectId, status: { notIn: ['DONE', 'CANCELLED'] } },
-      select: { id: true, name: true },
-    });
-    const openHighPriorityIssues = await tx.issue.findMany({
-      where: {
-        projectId,
-        severity: { in: ['HIGH', 'CRITICAL'] },
-        status: { notIn: ['RESOLVED', 'CLOSED'] },
-      },
-      select: { id: true, title: true },
-    });
-    const planDeliverables = await tx.projectDeliverable.findMany({
-      where: { workItem: { projectId }, required: true },
-      select: {
-        id: true,
-        name: true,
-        reviewMode: true,
-        needsRevision: true,
-        workItem: { select: { name: true } },
-        documents: {
-          where: { deletedAt: null },
+    const [incompleteWorkItems, openHighPriorityIssues, requiredDocuments, planDeliverables, pendingChangeRequests] =
+      await Promise.all([
+        tx.projectWorkItem.findMany({
+          where: { projectId, status: { notIn: ['DONE', 'CANCELLED'] } },
+          select: { id: true, name: true },
+        }),
+        tx.issue.findMany({
+          where: {
+            projectId,
+            severity: { in: ['HIGH', 'CRITICAL'] },
+            status: { notIn: ['RESOLVED', 'CLOSED'] },
+          },
+          select: { id: true, title: true },
+        }),
+        tx.document.findMany({
+          where: {
+            projectId,
+            required: true,
+            deletedAt: null,
+            projectDeliverableId: null,
+            status: { not: 'APPROVED' },
+          },
+          select: { id: true, name: true, status: true },
+          orderBy: { createdAt: 'asc' },
+        }),
+        tx.projectDeliverable.findMany({
+          where: { workItem: { projectId }, required: true },
           select: {
-            versions: {
-              orderBy: { createdAt: 'desc' },
+            id: true,
+            name: true,
+            reviewMode: true,
+            needsRevision: true,
+            workItem: { select: { name: true } },
+            documents: {
+              where: { deletedAt: null },
               select: {
-                createdAt: true,
-                reviews: {
+                versions: {
                   orderBy: { createdAt: 'desc' },
-                  select: { reviewType: true, status: true, createdAt: true },
+                  select: {
+                    createdAt: true,
+                    reviews: {
+                      orderBy: { createdAt: 'desc' },
+                      select: { reviewType: true, status: true, createdAt: true },
+                    },
+                  },
                 },
               },
             },
           },
-        },
-      },
-    });
+        }),
+        tx.projectChangeRequest.findMany({
+          where: { projectId, status: { in: ['PENDING_APPROVAL', 'APPROVED', 'APPLYING'] } },
+          select: { id: true, code: true, status: true },
+        }),
+      ]);
     const missingRequiredDeliverables = planDeliverables
       .filter((item) => !this.deliverables.decide(item).approved)
       .map((item) => ({
@@ -326,13 +344,10 @@ export class ProjectsRepository {
         deliverableName: item.name,
         reason: this.deliverables.decide(item).effectiveStatus,
       }));
-    const pendingChangeRequests = await tx.projectChangeRequest.findMany({
-      where: { projectId, status: { in: ['PENDING_APPROVAL', 'APPROVED', 'APPLYING'] } },
-      select: { id: true, code: true, status: true },
-    });
     return {
       incompleteWorkItems,
       openHighPriorityIssues,
+      missingRequiredDocuments: requiredDocuments,
       missingRequiredDeliverables,
       pendingChangeRequests,
     };
