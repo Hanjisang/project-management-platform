@@ -1,28 +1,70 @@
-# V2 Execution Acceptance
+# V2 Functional Parity Recovery + Execution Domain Acceptance
 
-验收日期：2026-08-24。分支：`feat/v2-execution-domain-redesign`。结论：P0=0、P1=0，核心 E2E 通过，满足 UAT 准入。
+验收日期：2026-08-24。分支：`fix/functional-parity-recovery`。
 
-## 业务闭环
+结论：本轮已完成 Execution Domain 收口与重构后功能等价性恢复。ProjectWorkItem 继续作为项目计划与任务中心的唯一执行事实源，同时恢复重构前未明确废弃的用户能力。GitHub Actions 完整质量流水线通过，可进入 UAT；本分支仍保持 Draft，未合并到 `main`。
 
-SOP Draft 可配置 Stage、Task、Checklist、Deliverable、真实 Template、Review Criteria 和三种 review mode；Published 完全冻结，Clone 后可编辑。生成 ProjectPlan 时事务复制完整快照，只产生 ProjectWorkItem。执行页、任务中心和 Drawer 读取同一 Checklist/Deliverable/DocumentVersionReview 事实。
+## 1. 执行域与功能等价性
 
-必交交付物上传贡献 50%，最终审查通过为 100%；人工可覆盖 AI，AI 失败或未配置可转人工，最新 DocumentVersion 决定状态。WorkItem、Stage、Plan、Project 自动重算，完成条件不足会阻断。
+- `SopTask` 仅作为 SOP 定义；项目生成后实际执行统一落到 `ProjectWorkItem`，不恢复 `ProjectPlanTask + Task` 双事实源。
+- SOP Published 版本不可直接修改；项目持有独立计划快照，不实时读取后续 SOP 定义。
+- 项目可以在尚未生成正式 SOP 计划前创建人工临时任务。后续生成正式计划时，安全的临时 Plan 会被正式 SOP Plan 吸收，人工 WorkItem 原 ID/状态保留，项目仍只有一个 ProjectPlan。
+- 实施计划页恢复直接操作 Checklist、下载交付模板、上传首版/新版本交付物、人工通过/驳回；任务抽屉和任务中心仍读取同一 ProjectWorkItem / ProjectDeliverable / Document 数据，不建立第二套状态。
+- 普通项目文档与正式 Deliverable 文档继续共存：Deliverable 关联用于正式交付，普通文档不要求绑定 Deliverable。
+- Dashboard、任务中心、项目执行、项目成员、问题风险、文档、消息、日报周报、知识库、用户/RBAC、集成配置、审计等原有产品入口继续保留。
 
-项目启动创建 baseline；±20% 内直接调整会留档和通知，超过阈值或 scope change 必须 CR。指定 approver 审批后由 PM 事务 apply，创建新 baseline，取消项保留历史。
+## 2. Checklist / Deliverable 进度规则
 
-## 证据
+进度只统计 Required 控制项，所有 Required Checklist 与 Required Deliverable 默认按**等单位**进入同一分母，Optional 项不计入进度且不阻断完成。
 
-- Fresh MySQL 8.4：5/5 migration + seed；Prisma schema diff 无差异。
-- Upgrade fixture：原 PlanTask/Task、Checklist、Deliverable、DocumentVersion、Review、ZenTao 映射关联保留。
-- Unit 89/89，Integration 36/36，Playwright E2E 11/11；0 failed、0 skipped。
-- format、lint、typecheck、build、git diff check 通过；npm audit 为 0 vulnerabilities。
-- Docker MySQL/API/Web healthy；`/health` 为 database up、LocalStorage configured、未配置集成不影响全局健康。
-- 应用内浏览器打开 8080 登录页，无控制台 warning/error；真实业务页面由 Playwright 浏览器在隔离库完成写入型验收。
+- Required Checklist 未完成 = 0；完成 = 1。
+- Required Deliverable 未上传 = 0；最新版本已上传但尚未最终通过 = 0.5；最新版本最终有效审核通过 = 1。
+- `progress = (Required Checklist 贡献之和 + Required Deliverable 贡献之和) / Required 控制项总数 × 100%`。
+- 例：2 个 Required Checklist + 1 个 Required Deliverable，执行序列为 `0 → 33 → 67 → 83 → 100`。
+- 已批准交付物上传新版本后，按最新版本重新计算，在新版本最终通过前该 Deliverable 回到 0.5；历史版本继续保留。
+- WorkItem、Stage、Plan、Project 由后端统一重算；存在未完成 Required Checklist 或未最终通过的 Required Deliverable 时，显式完成任务会被阻断。
 
-## 已知事项
+## 3. 当前交付物审核边界
 
-- P0：无。
-- P1：无。
-- P2：生产尚未配置真实 AI/DingTalk/ZenTao 凭证；AI provider 的真实外部连通性需在 UAT secret 就绪后复验。50 WorkItem/300 Checklist/100 Deliverable 未做独立压测，但 Execution API 使用单次嵌套查询，不按条目发请求。
+当前生产版本正式交付物固定使用**人工审核**。AI 相关 Schema、Provider 扩展点、Review/Job 数据结构仍保留，用于未来启用与 `NODE_ENV=test` 下的 Fake-AI 契约测试，但当前生产 UI 和正式 API 不提供可用的 AI 审核业务入口。
 
-发布前完整数据库备份：`.backups/pre_execution_redesign_20260824_complete.sql`。Execution Redesign 删除旧双轨表，应用回滚必须同时恢复该备份。
+钉钉、禅道和 AI 同样属于当前版本的预留集成接口：生产流程不依赖它们，不会主动进行真实外呼，也不会在未配置时伪造成功结果。
+
+## 4. 项目变更与 SOP 同步治理
+
+- 项目启动时形成批准 Baseline；正式范围变化通过 `ProjectChangeRequest` 管理，`APPROVED` 与 `APPLIED` 分离，Apply 事务化且可幂等重入。
+- ±20% 指项目**总体计划完成时间/总工期**相对最近一次 APPROVED Baseline 的变化，不是实际进度百分比。正负恰好 20% 可直接调整并留档通知，绝对值超过 20% 必须走 CR。
+- 防拆分以最近 APPROVED Baseline 为比较基准，不以上一次直接调整后的日期为新基准。
+- 新增/删除阶段、Required/Core WorkItem、Required Checklist、Required Deliverable、验收/审核标准等重大范围变化始终要求 CR，不受 ±20% 例外影响。
+- ACTIVE/PAUSED 项目的非必需人工临时任务可以免 CR，但新增、结构性计划修改、取消仅允许项目经理执行（管理员例外），并写入 Adjustment Log/通知；一般执行动作仍按任务权限处理。
+- 未启动且没有执行历史/人工变更数据的项目可安全直接同步 SOP；ACTIVE/PAUSED 项目不能通过直接 SOP 重建绕过 Change Control。
+- CR Apply 后统一重算 WorkItem → Stage → Plan → Project，允许因新范围加入而解释性下降进度，不删除既有执行历史。
+
+## 5. 文件与后台恢复能力
+
+- StorageProvider 继续隔离实际对象存储；LocalStorage 已实现，路径穿越/文件类型/大小等校验保留。
+- 文件物理删除失败会写入 `StorageCleanupJob`；清理 Worker 服务启动时执行一轮，之后周期重试，通过 `id + attempts` 乐观抢占避免同一轮重复处理，成功写 `completedAt`，失败保留 `lastError`，最多重试 10 次。
+- `templates/templates.7z` 不属于本轮提交内容，未作为运行依赖处理。
+
+## 6. 最终 CI 验收证据
+
+GitHub Actions V2 CI #122（代码 HEAD `b6f8110f1dafa97a01e224945841a190ecec5e15`）完整通过：
+
+- npm install / dependency audit：通过，0 vulnerabilities。
+- lint：通过。
+- typecheck：通过。
+- Unit：**100/100 passed**，26 个 test files，0 failed、0 skipped。
+- Fresh MySQL 8.4：发现并成功应用 **5/5 migrations**，随后 seed 成功。
+- Integration：**37/37 passed**，4 个 integration files，0 failed、0 skipped；包含临时人工 Plan → 正式 SOP Plan 吸收回归。
+- build：API/Web/共享包全部通过。
+- Web 当前最大 JavaScript chunk：174.48 kB，gzip 67.27 kB。
+- Playwright：**11/11 passed**，覆盖核心生产业务流、安全场景，以及桌面/手机/横屏导航。
+- Container job：Docker Compose config、API image build、Web image build 全部通过。
+
+## 7. 已知非阻断事项
+
+- 尚未执行独立的 `50 WorkItem / 300 Checklist / 100 Deliverable` 专项负载基准，因此不对该规模给出量化性能承诺；Execution API 已采用聚合读取，后续 UAT 可补专项测量。
+- AI/DingTalk/ZenTao 不是“等待配置凭证即可上线”的当前功能，而是本版本**明确未启用**的扩展接口；启用时应作为后续受控版本重新测试。
+- 本验收只证明该 Draft 分支达到 UAT 准入，不代表已经合并、发布或部署到生产。
+
+发布前历史备份仍保留：`.backups/pre_execution_redesign_20260824_complete.sql`。如执行与旧双轨表删除相关的数据库级回滚，必须结合对应数据库备份/迁移策略处理。
