@@ -19,11 +19,12 @@ function fixture(projectId: string | null = 'project-id') {
     },
     zentaoTaskSync: { findMany: vi.fn().mockResolvedValue([]) },
   } as unknown as PrismaService;
+  const assertScope = vi.fn().mockResolvedValue(undefined);
   const scope = {
-    assert: vi.fn().mockResolvedValue(undefined),
+    assert: assertScope,
     where: vi.fn().mockReturnValue({ id: 'project-id' }),
   } as unknown as ProjectScopeService;
-  return { service: new ZentaoService(prisma, scope), scope };
+  return { service: new ZentaoService(prisma, scope), assertScope };
 }
 
 describe('ZentaoService reserved integration', () => {
@@ -32,10 +33,10 @@ describe('ZentaoService reserved integration', () => {
   });
 
   it('checks project scope then rejects synchronization without external calls', async () => {
-    const { service, scope } = fixture();
+    const { service, assertScope } = fixture();
     await expect(service.syncTask(user, 'task-id')).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'ZENTAO_NOT_ENABLED' }),
     });
-    expect(scope.assert).toHaveBeenCalledWith(user, 'project-id');
+    expect(assertScope).toHaveBeenCalledWith(user, 'project-id');
   });
 });
