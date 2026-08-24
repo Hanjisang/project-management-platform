@@ -56,6 +56,7 @@ const executionInclude = Prisma.validator<Prisma.ProjectWorkItemInclude>()({
 });
 
 type WorkItemTree = Prisma.ProjectWorkItemGetPayload<{ include: typeof executionInclude }>;
+type WorkItemProvenance = { sourceType: 'MESSAGE'; sourceId: string };
 
 @Injectable()
 export class WorkItemsService {
@@ -90,8 +91,9 @@ export class WorkItemsService {
       }),
       this.prisma.projectWorkItem.count({ where }),
     ]);
+    const provenance = await this.provenanceFor(items.map((item) => item.id));
     return {
-      items: items.map((item) => this.present(item)),
+      items: items.map((item) => this.present(item, provenance.get(item.id))),
       page: query.page,
       pageSize: query.pageSize,
       total,
@@ -105,7 +107,8 @@ export class WorkItemsService {
     });
     if (!item) throw this.notFound();
     await this.scope.assert(user, item.projectId);
-    return this.present(item);
+    const provenance = await this.provenanceFor([item.id]);
+    return this.present(item, provenance.get(item.id));
   }
 
   async execution(user: RequestUser, projectId: string) {
@@ -133,9 +136,13 @@ export class WorkItemsService {
       }),
     ]);
     if (!project) throw new NotFoundException({ code: 'PROJECT_NOT_FOUND', message: '项目不存在' });
-    const stages = (plan?.stages ?? []).map((stage) => ({
+    const rawStages = plan?.stages ?? [];
+    const provenance = await this.provenanceFor(
+      rawStages.flatMap((stage) => stage.workItems.map((item) => item.id)),
+    );
+    const stages = rawStages.map((stage) => ({
       ...stage,
-      workItems: stage.workItems.map((item) => this.present(item)),
+      workItems: stage.workItems.map((item) => this.present(item, provenance.get(item.id))),
     }));
     const flat = stages.flatMap((stage) => stage.workItems);
     const today = new Date();
@@ -306,8 +313,7 @@ export class WorkItemsService {
         },
       });
       if (
-        (requiredUnits?._count.checklistItems ?? 0) + (requiredUnits?._count.deliverables ?? 0) >
-        0
+        (requiredUnits?._count.checklistItems ?? 0) + (requiredUnits?._count.deliverables ?? 0) > 0
       )
         throw new ConflictException({
           code: 'WORK_ITEM_PROGRESS_MANAGED',
@@ -387,9 +393,14 @@ export class WorkItemsService {
     return updated;
   }
 
-  async cancel(user: RequestUser, id: string, _dto: CancelWorkItemDto) {
+  async cancel(user: RequestUser, id: string, dto: CancelWorkItemDto) {
     const item = await this.loadScoped(user, id);
     if (item.status === 'CANCELLED') return item;
+    if (item.status === 'DONE')
+      throw new ConflictException({
+        code: 'WORK_ITEM_STATUS_TRANSITION_INVALID',
+        message: '已完成任务不能取消',
+      });
     const updated = await this.prisma.$transaction(async (tx) => {
       await assertProjectWritable(tx, item.projectId);
       const project = await tx.project.findUniqueOrThrow({ where: { id: item.projectId } });
@@ -411,7 +422,7 @@ export class WorkItemsService {
           id,
           this.summary(item),
           this.summary(result),
-          _dto.reason || '取消一般人工任务',
+          dto.reason || '取消一般人工任务并保留执行历史',
           item.ownerUserId,
         );
       return result;
@@ -443,9 +454,11 @@ export class WorkItemsService {
     return this.prisma.projectChecklistItem.findUnique({ where: { id } });
   }
 
-  private present(item: WorkItemTree) {
+  private present(item: WorkItemTree, provenance?: WorkItemProvenance) {
     return {
       ...item,
+      sourceType: provenance?.sourceType ?? item.sourceType,
+      sourceId: provenance?.sourceId,
       checklistSummary: {
         completed: item.checklistItems.filter((entry) => entry.required && entry.completed).length,
         total: item.checklistItems.filter((entry) => entry.required).length,
@@ -467,11 +480,26 @@ export class WorkItemsService {
     };
   }
 
-  private async loadScoped(
-    user: RequestUser,
-    id: string,
-    includeExecution: true,
-  ): Promise<WorkItemTree>;
+  private async provenanceFor(ids: string[]): Promise<Map<string, WorkItemProvenance>> {
+    const result = new Map<string, WorkItemProvenance>();
+    if (!ids.length) return result;
+    const actions = await this.prisma.pendingAction.findMany({
+      where: {
+        resultResourceType: 'ProjectWorkItem',
+        resultResourceId: { in: ids },
+        status: 'CONFIRMED',
+      },
+      select: { resultResourceId: true, messageId: true, confirmedAt: true },
+      orderBy: { confirmedAt: 'desc' },
+    });
+    for (const action of actions) {
+      if (!action.resultResourceId || result.has(action.resultResourceId)) continue;
+      result.set(action.resultResourceId, { sourceType: 'MESSAGE', sourceId: action.messageId });
+    }
+    return result;
+  }
+
+  private async loadScoped(user: RequestUser, id: string, includeExecution: true): Promise<WorkItemTree>;
   private async loadScoped(
     user: RequestUser,
     id: string,
