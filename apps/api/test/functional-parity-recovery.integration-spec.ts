@@ -138,7 +138,7 @@ describe.skipIf(!hasDatabase)('functional parity recovery against MySQL', () => 
       await prisma.document.update({ where: { id: required.id }, data: { status } });
       const response = await write(admin, 'post', `/api/v2/projects/${project.id}/close`).send();
       expect(response.status).toBe(409);
-      expect(response.body.error.details.missingRequiredDocuments).toEqual(
+      expect(response.body.details.missingRequiredDocuments).toEqual(
         expect.arrayContaining([expect.objectContaining({ id: required.id, name: '上线方案', status })]),
       );
     }
