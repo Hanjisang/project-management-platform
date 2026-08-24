@@ -60,6 +60,26 @@ const editForm = reactive({
   progress: 0,
   status: 'TODO' as Exclude<TaskStatus, 'DONE'>,
 });
+function sourceLabel(value: string): string {
+  return {
+    SOP: 'SOP',
+    MANUAL: '人工',
+    MESSAGE: '消息',
+    ISSUE: '问题',
+    ZENTAO: '禅道',
+    CHANGE: '变更',
+  }[value] ?? value;
+}
+function sourceTagType(value: string): 'primary' | 'success' | 'warning' | 'info' | 'danger' {
+  return {
+    SOP: 'primary',
+    MESSAGE: 'success',
+    ISSUE: 'danger',
+    ZENTAO: 'info',
+    CHANGE: 'warning',
+    MANUAL: 'info',
+  }[value] as 'primary' | 'success' | 'warning' | 'info' | 'danger';
+}
 function resetCreateForm(): void {
   Object.assign(form, {
     projectId: '',
@@ -145,19 +165,21 @@ async function saveEdit(): Promise<void> {
     plannedStartDate: editForm.plannedStartDate || undefined,
     plannedEndDate: editForm.plannedEndDate || undefined,
   };
-  await tasksApi.update(editingId.value, {
-    ...payload,
-  });
+  await tasksApi.update(editingId.value, { ...payload });
   editDialog.value = false;
   ElMessage.success('任务已更新');
   await client.invalidateQueries({ queryKey: ['tasks'] });
 }
-async function remove(id: string): Promise<void> {
-  await ElMessageBox.confirm('确定删除该任务？已完成任务不能直接删除。', '删除任务', {
-    type: 'warning',
-  });
-  await tasksApi.cancel(id, '用户在任务中心取消');
+async function cancelTask(id: string): Promise<void> {
+  await ElMessageBox.confirm(
+    '确定取消该任务？任务将保留在执行历史中，不会物理删除。',
+    '取消任务',
+    { type: 'warning' },
+  );
+  await tasksApi.cancel(id, '用户在任务中心取消，保留执行历史');
+  ElMessage.success('任务已取消');
   await client.invalidateQueries({ queryKey: ['tasks'] });
+  await client.invalidateQueries({ queryKey: ['dashboard'] });
 }
 async function setStatus(
   id: string,
@@ -184,30 +206,24 @@ async function complete(id: string): Promise<void> {
 </script>
 <template>
   <div>
-    <PageHeader title="任务中心" description="统一汇总 SOP、人工与正式变更新增的 ProjectWorkItem"
-      ><el-button v-if="auth.has(PERMISSIONS.TASK_CREATE)" type="primary" @click="dialog = true"
-        >创建任务</el-button
-      ></PageHeader
+    <PageHeader
+      title="任务中心"
+      description="统一汇总 SOP、人工、消息、问题、禅道与正式变更新增的 ProjectWorkItem"
     >
+      <el-button v-if="auth.has(PERMISSIONS.TASK_CREATE)" type="primary" @click="dialog = true">创建任务</el-button>
+    </PageHeader>
     <div class="filters">
       <div class="filter-row">
-        <el-input
-          v-model="filters.search"
-          clearable
-          placeholder="搜索任务"
-          style="width: 240px"
-        /><RemoteProjectSelect
-          v-model="filters.projectId"
-          placeholder="搜索项目"
-          style="width: 240px"
-        />
-        ><el-select v-model="filters.status" clearable placeholder="状态" style="width: 150px"
-          ><el-option
+        <el-input v-model="filters.search" clearable placeholder="搜索任务" style="width: 240px" />
+        <RemoteProjectSelect v-model="filters.projectId" placeholder="搜索项目" style="width: 240px" />
+        <el-select v-model="filters.status" clearable placeholder="状态" style="width: 150px">
+          <el-option
             v-for="status in ['TODO', 'IN_PROGRESS', 'BLOCKED', 'DONE', 'CANCELLED']"
             :key="status"
             :label="status"
             :value="status"
-        /></el-select>
+          />
+        </el-select>
       </div>
     </div>
     <ApiErrorView
@@ -217,94 +233,70 @@ async function complete(id: string): Promise<void> {
       @retry="query.refetch()"
     />
     <div v-else class="panel table-wrap">
-      <el-table :data="query.data.value?.items ?? []" v-loading="query.isLoading.value"
-        ><el-table-column label="任务" min-width="240" fixed
-          ><template #default="scope"
-            ><el-tag
-              size="small"
-              :type="
-                scope.row.sourceType === 'SOP'
-                  ? 'primary'
-                  : scope.row.sourceType === 'CHANGE'
-                    ? 'warning'
-                    : 'info'
-              "
-              style="margin-right: 8px"
-              >{{
-                scope.row.sourceType === 'SOP'
-                  ? 'SOP'
-                  : scope.row.sourceType === 'CHANGE'
-                    ? '变更'
-                    : '人工'
-              }}</el-tag
-            ><el-link type="primary" @click="openDetail(scope.row)">{{
-              scope.row.name
-            }}</el-link></template
-          ></el-table-column
-        ><el-table-column prop="project.name" label="项目" min-width="160" /><el-table-column
-          prop="stage.name"
-          label="阶段"
-          min-width="120"
-        /><el-table-column prop="parent.name" label="父任务" min-width="160" /><el-table-column
-          prop="owner.displayName"
-          label="负责人"
-          width="120"
-        /><el-table-column label="Checklist" width="110"
-          ><template #default="scope">{{
+      <el-table :data="query.data.value?.items ?? []" v-loading="query.isLoading.value">
+        <el-table-column label="任务" min-width="240" fixed>
+          <template #default="scope">
+            <el-tag size="small" :type="sourceTagType(String(scope.row.sourceType))" style="margin-right: 8px">
+              {{ sourceLabel(String(scope.row.sourceType)) }}
+            </el-tag>
+            <el-link type="primary" @click="openDetail(scope.row)">{{ scope.row.name }}</el-link>
+          </template>
+        </el-table-column>
+        <el-table-column prop="project.name" label="项目" min-width="160" />
+        <el-table-column prop="stage.name" label="阶段" min-width="120" />
+        <el-table-column prop="parent.name" label="父任务" min-width="160" />
+        <el-table-column prop="owner.displayName" label="负责人" width="120" />
+        <el-table-column label="Checklist" width="110">
+          <template #default="scope">{{
             scope.row.checklistSummary
               ? `${scope.row.checklistSummary.completed}/${scope.row.checklistSummary.total}`
               : '-'
-          }}</template></el-table-column
-        ><el-table-column label="交付物" width="100"
-          ><template #default="scope">{{
+          }}</template>
+        </el-table-column>
+        <el-table-column label="交付物" width="100">
+          <template #default="scope">{{
             scope.row.deliverableSummary
               ? `${scope.row.deliverableSummary.approved}/${scope.row.deliverableSummary.total}`
               : '-'
-          }}</template></el-table-column
-        ><el-table-column label="优先级" width="100"
-          ><template #default="scope"
-            ><StatusTag :value="scope.row.priority" /></template></el-table-column
-        ><el-table-column label="状态" width="110"
-          ><template #default="scope"
-            ><StatusTag :value="scope.row.status" /></template></el-table-column
-        ><el-table-column prop="plannedEndDate" label="截止日期" width="120" /><el-table-column
-          label="操作"
-          width="330"
-          fixed="right"
-          ><template #default="scope"
-            ><el-button link type="primary" @click="openDetail(scope.row)">详情</el-button
-            ><el-button
+          }}</template>
+        </el-table-column>
+        <el-table-column label="优先级" width="100">
+          <template #default="scope"><StatusTag :value="scope.row.priority" /></template>
+        </el-table-column>
+        <el-table-column label="状态" width="110">
+          <template #default="scope"><StatusTag :value="scope.row.status" /></template>
+        </el-table-column>
+        <el-table-column prop="plannedEndDate" label="截止日期" width="120" />
+        <el-table-column label="操作" width="330" fixed="right">
+          <template #default="scope">
+            <el-button link type="primary" @click="openDetail(scope.row)">详情</el-button>
+            <el-button
               v-if="auth.has(PERMISSIONS.TASK_EDIT) && scope.row.status === 'TODO'"
               link
               type="primary"
               @click="setStatus(scope.row.id, 'IN_PROGRESS')"
-              >开始</el-button
-            ><el-button
-              v-if="
-                auth.has(PERMISSIONS.TASK_COMPLETE) &&
-                !['DONE', 'CANCELLED'].includes(scope.row.status)
-              "
+            >开始</el-button>
+            <el-button
+              v-if="auth.has(PERMISSIONS.TASK_COMPLETE) && !['DONE', 'CANCELLED'].includes(scope.row.status)"
               link
               type="success"
               @click="complete(scope.row.id)"
-              >完成</el-button
-            ><el-button
+            >完成</el-button>
+            <el-button
               v-if="auth.has(PERMISSIONS.TASK_EDIT) && scope.row.status === 'BLOCKED'"
               link
               @click="setStatus(scope.row.id, 'IN_PROGRESS')"
-              >解除阻塞</el-button
-            ><el-button v-if="auth.has(PERMISSIONS.TASK_EDIT)" link @click="openEdit(scope.row)"
-              >编辑</el-button
-            ><el-button
-              v-if="auth.has(PERMISSIONS.TASK_EDIT) && scope.row.status !== 'CANCELLED'"
+            >解除阻塞</el-button>
+            <el-button v-if="auth.has(PERMISSIONS.TASK_EDIT)" link @click="openEdit(scope.row)">编辑</el-button>
+            <el-button
+              v-if="auth.has(PERMISSIONS.TASK_EDIT) && !['DONE', 'CANCELLED'].includes(scope.row.status)"
               link
               type="danger"
-              @click="remove(scope.row.id)"
-              >取消</el-button
-            ></template
-          ></el-table-column
-        ></el-table
-      >
+              @click="cancelTask(scope.row.id)"
+            >取消</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
       <el-pagination
         v-if="query.data.value?.total"
         v-model:current-page="page"
@@ -315,111 +307,66 @@ async function complete(id: string): Promise<void> {
         style="padding: 16px"
       />
     </div>
-    <el-dialog
-      v-model="dialog"
-      title="创建执行任务"
-      width="min(580px,94vw)"
-      destroy-on-close
-      @closed="resetCreateForm"
-      ><el-form label-position="top"
-        ><el-form-item label="项目" required
-          ><RemoteProjectSelect v-model="form.projectId" /></el-form-item
-        ><el-form-item label="标题" required><el-input v-model.trim="form.name" /></el-form-item
-        ><el-form-item label="说明"
-          ><el-input v-model="form.description" type="textarea" :rows="3"
-        /></el-form-item>
+    <el-dialog v-model="dialog" title="创建执行任务" width="min(580px,94vw)" destroy-on-close @closed="resetCreateForm">
+      <el-form label-position="top">
+        <el-form-item label="项目" required><RemoteProjectSelect v-model="form.projectId" /></el-form-item>
+        <el-form-item label="标题" required><el-input v-model.trim="form.name" /></el-form-item>
+        <el-form-item label="说明"><el-input v-model="form.description" type="textarea" :rows="3" /></el-form-item>
         <div class="content-grid">
-          <el-form-item label="优先级"
-            ><el-select v-model="form.priority" style="width: 100%"
-              ><el-option
-                v-for="item in ['LOW', 'MEDIUM', 'HIGH', 'URGENT']"
-                :key="item"
-                :label="item"
-                :value="item" /></el-select></el-form-item
-          ><el-form-item label="截止日期"
-            ><el-date-picker
-              v-model="form.plannedEndDate"
-              value-format="YYYY-MM-DD"
-              type="date"
-              style="width: 100%" /></el-form-item
-          ><el-form-item label="计划开始"
-            ><el-date-picker
-              v-model="form.plannedStartDate"
-              value-format="YYYY-MM-DD"
-              type="date"
-              style="width: 100%" /></el-form-item
-          ><el-form-item label="负责人"
-            ><el-select v-model="form.ownerUserId" clearable style="width: 100%"
-              ><el-option
-                v-for="user in memberOptions"
-                :key="user.id"
-                :label="user.displayName"
-                :value="user.id" /></el-select></el-form-item
-          ><el-form-item label="父任务（可选）"
-            ><el-select v-model="form.parentWorkItemId" clearable style="width: 100%"
-              ><el-option
-                v-for="item in planOptions"
-                :key="item.id"
-                :label="item.name"
-                :value="item.id" /></el-select
-          ></el-form-item></div></el-form
-      ><template #footer
-        ><el-button @click="dialog = false">取消</el-button
-        ><el-button
-          type="primary"
-          :disabled="!form.projectId || !form.name"
-          :loading="create.isPending.value"
-          @click="create.mutate()"
-          >创建</el-button
-        ></template
-      ></el-dialog
-    ><el-dialog v-model="editDialog" title="编辑任务" width="min(620px,94vw)" destroy-on-close
-      ><el-form label-position="top"
-        ><el-form-item label="标题" required><el-input v-model.trim="editForm.name" /></el-form-item
-        ><el-form-item label="说明"
-          ><el-input v-model="editForm.description" type="textarea" :rows="3"
-        /></el-form-item>
+          <el-form-item label="优先级">
+            <el-select v-model="form.priority" style="width: 100%">
+              <el-option v-for="item in ['LOW', 'MEDIUM', 'HIGH', 'URGENT']" :key="item" :label="item" :value="item" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="截止日期"><el-date-picker v-model="form.plannedEndDate" value-format="YYYY-MM-DD" type="date" style="width: 100%" /></el-form-item>
+          <el-form-item label="计划开始"><el-date-picker v-model="form.plannedStartDate" value-format="YYYY-MM-DD" type="date" style="width: 100%" /></el-form-item>
+          <el-form-item label="负责人">
+            <el-select v-model="form.ownerUserId" clearable style="width: 100%">
+              <el-option v-for="user in memberOptions" :key="user.id" :label="user.displayName" :value="user.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="父任务（可选）">
+            <el-select v-model="form.parentWorkItemId" clearable style="width: 100%">
+              <el-option v-for="item in planOptions" :key="item.id" :label="item.name" :value="item.id" />
+            </el-select>
+          </el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialog = false">取消</el-button>
+        <el-button type="primary" :disabled="!form.projectId || !form.name" :loading="create.isPending.value" @click="create.mutate()">创建</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="editDialog" title="编辑任务" width="min(620px,94vw)" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item label="标题" required><el-input v-model.trim="editForm.name" /></el-form-item>
+        <el-form-item label="说明"><el-input v-model="editForm.description" type="textarea" :rows="3" /></el-form-item>
         <div class="content-grid">
-          <el-form-item label="负责人"
-            ><el-select v-model="editForm.ownerUserId" clearable style="width: 100%"
-              ><el-option
-                v-for="user in memberOptions"
-                :key="user.id"
-                :label="user.displayName"
-                :value="user.id" /></el-select></el-form-item
-          ><el-form-item label="优先级"
-            ><el-select v-model="editForm.priority" style="width: 100%"
-              ><el-option
-                v-for="item in ['LOW', 'MEDIUM', 'HIGH', 'URGENT']"
-                :key="item"
-                :value="item" /></el-select></el-form-item
-          ><el-form-item label="状态"
-            ><el-select v-model="editForm.status" style="width: 100%"
-              ><el-option
-                v-for="item in ['TODO', 'IN_PROGRESS', 'BLOCKED']"
-                :key="item"
-                :value="item" /></el-select></el-form-item
-          ><el-form-item label="进度（含必需项时由系统管理）"
-            ><el-input-number v-model="editForm.progress" :min="0" :max="99" /></el-form-item
-          ><el-form-item label="计划开始"
-            ><el-date-picker
-              v-model="editForm.plannedStartDate"
-              value-format="YYYY-MM-DD"
-              type="date"
-              style="width: 100%" /></el-form-item
-          ><el-form-item label="截止日期"
-            ><el-date-picker
-              v-model="editForm.plannedEndDate"
-              value-format="YYYY-MM-DD"
-              type="date"
-              style="width: 100%"
-          /></el-form-item></div></el-form
-      ><template #footer
-        ><el-button @click="editDialog = false">取消</el-button
-        ><el-button type="primary" :disabled="!editForm.name" @click="saveEdit"
-          >保存</el-button
-        ></template
-      ></el-dialog
-    ><TaskExecutionDrawer v-model="detailDrawer" :task-id="detailTaskId" />
+          <el-form-item label="负责人">
+            <el-select v-model="editForm.ownerUserId" clearable style="width: 100%">
+              <el-option v-for="user in memberOptions" :key="user.id" :label="user.displayName" :value="user.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="优先级">
+            <el-select v-model="editForm.priority" style="width: 100%">
+              <el-option v-for="item in ['LOW', 'MEDIUM', 'HIGH', 'URGENT']" :key="item" :value="item" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="状态">
+            <el-select v-model="editForm.status" style="width: 100%">
+              <el-option v-for="item in ['TODO', 'IN_PROGRESS', 'BLOCKED']" :key="item" :value="item" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="进度（含必需项时由系统管理）"><el-input-number v-model="editForm.progress" :min="0" :max="99" /></el-form-item>
+          <el-form-item label="计划开始"><el-date-picker v-model="editForm.plannedStartDate" value-format="YYYY-MM-DD" type="date" style="width: 100%" /></el-form-item>
+          <el-form-item label="截止日期"><el-date-picker v-model="editForm.plannedEndDate" value-format="YYYY-MM-DD" type="date" style="width: 100%" /></el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialog = false">取消</el-button>
+        <el-button type="primary" :disabled="!editForm.name" @click="saveEdit">保存</el-button>
+      </template>
+    </el-dialog>
+    <TaskExecutionDrawer v-model="detailDrawer" :task-id="detailTaskId" />
   </div>
 </template>
