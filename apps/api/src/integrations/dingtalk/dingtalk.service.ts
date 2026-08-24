@@ -12,10 +12,13 @@ export class DingtalkService {
     };
   }
 
-  async receive(_payload: unknown): Promise<never> {
-    throw new ConflictException({
-      code: 'DINGTALK_NOT_ENABLED',
-      message: '钉钉集成当前仅预留接口，尚未启用消息接收实现',
-    });
+  receive(payload: unknown): Promise<{ id: string }> {
+    void payload;
+    return Promise.reject(
+      new ConflictException({
+        code: 'DINGTALK_NOT_ENABLED',
+        message: '钉钉集成当前仅预留接口，尚未启用消息接收实现',
+      }),
+    );
   }
 }
