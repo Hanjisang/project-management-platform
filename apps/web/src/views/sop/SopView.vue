@@ -37,9 +37,8 @@ const deliverableForm = reactive({
   description: '',
   required: true,
   sortOrder: 0,
-  reviewMode: 'HUMAN_ONLY' as 'AI_WITH_HUMAN_OVERRIDE' | 'AI_THEN_HUMAN_REQUIRED' | 'HUMAN_ONLY',
-  aiAutoApproveThreshold: 85,
-  aiReviewInstruction: '',
+  reviewMode: 'HUMAN_ONLY' as const,
+  aiReviewEnabled: false,
 });
 const criterionForm = reactive({
   name: '',
@@ -183,16 +182,20 @@ function openDeliverable(taskId: string, deliverable?: SopDeliverable): void {
     description: deliverable?.description ?? '',
     required: deliverable?.required ?? true,
     sortOrder: deliverable?.sortOrder ?? 0,
-    reviewMode: deliverable?.reviewMode ?? 'HUMAN_ONLY',
-    aiAutoApproveThreshold: deliverable?.aiAutoApproveThreshold ?? 85,
-    aiReviewInstruction: deliverable?.aiReviewInstruction ?? '',
+    reviewMode: 'HUMAN_ONLY',
+    aiReviewEnabled: false,
   });
   deliverableDialog.value = true;
 }
 async function saveDeliverable(): Promise<void> {
+  const payload = {
+    ...deliverableForm,
+    reviewMode: 'HUMAN_ONLY' as const,
+    aiReviewEnabled: false,
+  };
   if (editingDeliverable.value)
-    await sopApi.updateDeliverable(editingDeliverable.value, deliverableForm);
-  else await sopApi.createDeliverable(selectedTask.value, deliverableForm);
+    await sopApi.updateDeliverable(editingDeliverable.value, payload);
+  else await sopApi.createDeliverable(selectedTask.value, payload);
   deliverableDialog.value = false;
   ElMessage.success(editingDeliverable.value ? '交付物已更新' : '交付物已新增');
   await refresh();
@@ -219,7 +222,7 @@ function openCriterion(id: string): void {
 async function saveCriterion(): Promise<void> {
   await sopApi.createReviewCriterion(selectedDeliverable.value, criterionForm);
   criterionDialog.value = false;
-  ElMessage.success('审核标准已新增');
+  ElMessage.success('验收标准已新增');
   await refresh();
 }
 async function removeCriterion(id: string): Promise<void> {
@@ -425,7 +428,7 @@ function fileSize(value: string): string {
                           <p v-if="deliverable.description" class="muted">
                             {{ deliverable.description }}
                           </p>
-                          <p class="muted">审核模式：{{ deliverable.reviewMode }}</p>
+                          <p class="muted">审核方式：人工审核（AI 接口预留，当前未启用）</p>
                         </div>
                         <div
                           v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_EDIT)"
@@ -434,7 +437,7 @@ function fileSize(value: string): string {
                           <el-button size="small" @click="openTemplateUpload(deliverable.id)"
                             >上传模板</el-button
                           ><el-button size="small" @click="openCriterion(deliverable.id)"
-                            >新增审核标准</el-button
+                            >新增验收标准</el-button
                           ><el-button size="small" @click="openDeliverable(task.id, deliverable)"
                             >编辑</el-button
                           ><el-button
@@ -467,7 +470,7 @@ function fileSize(value: string): string {
                       </div>
                       <span v-else class="muted">暂无标准模板文件</span>
                       <div class="criterion-list">
-                        <strong>审核标准</strong>
+                        <strong>验收标准</strong>
                         <div
                           v-for="criterion in deliverable.reviewCriteria"
                           :key="criterion.id"
@@ -486,7 +489,7 @@ function fileSize(value: string): string {
                           >
                         </div>
                         <span v-if="!deliverable.reviewCriteria.length" class="muted"
-                          >暂无审核标准</span
+                          >暂无验收标准</span
                         >
                       </div>
                     </div>
@@ -559,21 +562,9 @@ function fileSize(value: string): string {
             :rows="3" /></el-form-item
         ><el-form-item label="排序"
           ><el-input-number v-model="deliverableForm.sortOrder" :min="0" /></el-form-item
-        ><el-form-item label="审核模式">
-          <el-select v-model="deliverableForm.reviewMode" style="width: 100%">
-            <el-option label="AI 默认审核，人工可覆盖" value="AI_WITH_HUMAN_OVERRIDE" />
-            <el-option label="AI 初审后必须人工终审" value="AI_THEN_HUMAN_REQUIRED" />
-            <el-option label="仅人工审核" value="HUMAN_ONLY" />
-          </el-select>
+        ><el-form-item label="审核方式">
+          <el-input model-value="人工审核（AI 接口预留，当前未启用）" disabled />
         </el-form-item>
-        <el-form-item
-          v-if="deliverableForm.reviewMode === 'AI_WITH_HUMAN_OVERRIDE'"
-          label="AI 自动通过阈值"
-          ><el-input-number v-model="deliverableForm.aiAutoApproveThreshold" :min="0" :max="100"
-        /></el-form-item>
-        <el-form-item v-if="deliverableForm.reviewMode !== 'HUMAN_ONLY'" label="AI 审核指令"
-          ><el-input v-model="deliverableForm.aiReviewInstruction" type="textarea" :rows="3"
-        /></el-form-item>
         <el-checkbox v-model="deliverableForm.required">必交</el-checkbox></el-form
       ><template #footer
         ><el-button @click="deliverableDialog = false">取消</el-button
@@ -583,7 +574,7 @@ function fileSize(value: string): string {
       ></el-dialog
     ><el-dialog
       v-model="criterionDialog"
-      title="新增审核标准"
+      title="新增验收标准"
       width="min(520px,94vw)"
       destroy-on-close
     >
@@ -597,9 +588,7 @@ function fileSize(value: string): string {
         <el-form-item label="权重"
           ><el-input-number v-model="criterionForm.weight" :min="0" :max="100"
         /></el-form-item>
-        <el-checkbox v-model="criterionForm.required"
-          >必需标准（不通过时 AI 不可自动批准）</el-checkbox
-        >
+        <el-checkbox v-model="criterionForm.required">必需验收标准</el-checkbox>
       </el-form>
       <template #footer
         ><el-button @click="criterionDialog = false">取消</el-button
