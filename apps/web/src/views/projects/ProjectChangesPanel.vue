@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref, toRef } from 'vue';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { PERMISSIONS } from '@pmp/shared-constants';
@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/auth';
 import StatusTag from '../../components/StatusTag.vue';
 
 const props = defineProps<{ projectId: string }>();
+const projectId = toRef(props, 'projectId');
 const auth = useAuthStore();
 const client = useQueryClient();
 const adjustmentDialog = ref(false);
@@ -23,26 +24,36 @@ const form = reactive({
   scopeChange: false,
 });
 const changes = useQuery({
-  queryKey: ['project-changes', props.projectId],
-  queryFn: () => projectChangesApi.list(props.projectId),
+  queryKey: computed(() => ['project-changes', projectId.value]),
+  queryFn: () => projectChangesApi.list(projectId.value),
 });
 
+async function invalidateProjectExecution(): Promise<void> {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: ['project', projectId.value] }),
+    client.invalidateQueries({ queryKey: ['project-plan', projectId.value] }),
+    client.invalidateQueries({ queryKey: ['project-execution', projectId.value] }),
+    client.invalidateQueries({ queryKey: ['tasks'] }),
+    client.invalidateQueries({ queryKey: ['dashboard'] }),
+  ]);
+}
+
 async function classify(): Promise<void> {
-  impact.value = await projectChangesApi.preflight(props.projectId, {
+  impact.value = await projectChangesApi.preflight(projectId.value, {
     proposedCompletionDate: form.proposedCompletionDate || undefined,
     scopeChange: form.scopeChange,
   });
 }
 async function saveAdjustment(): Promise<void> {
-  await projectChangesApi.adjust(props.projectId, {
+  await projectChangesApi.adjust(projectId.value, {
     proposedCompletionDate: form.proposedCompletionDate,
     reason: form.reason,
   });
   adjustmentDialog.value = false;
   ElMessage.success('一般计划调整已直接生效并留档');
   await Promise.all([
-    client.invalidateQueries({ queryKey: ['project-changes', props.projectId] }),
-    client.invalidateQueries({ queryKey: ['project', props.projectId] }),
+    client.invalidateQueries({ queryKey: ['project-changes', projectId.value] }),
+    invalidateProjectExecution(),
   ]);
 }
 async function createChange(): Promise<void> {
@@ -51,7 +62,7 @@ async function createChange(): Promise<void> {
     ElMessage.warning('当前影响属于一般调整，请使用“直接调整”');
     return;
   }
-  await projectChangesApi.create(props.projectId, {
+  await projectChangesApi.create(projectId.value, {
     title: form.title,
     description: form.description,
     changeType: form.scopeChange ? 'SCOPE' : 'SCHEDULE',
@@ -82,11 +93,7 @@ async function act(id: string, action: 'submit' | 'approve' | 'reject' | 'apply'
     comment = (await ElMessageBox.prompt('审批意见（可选）', '批准变更')).value;
   await projectChangesApi[action](id, comment);
   ElMessage.success('变更状态已更新');
-  await Promise.all([
-    changes.refetch(),
-    client.invalidateQueries({ queryKey: ['project', props.projectId] }),
-    client.invalidateQueries({ queryKey: ['project-plan', props.projectId] }),
-  ]);
+  await Promise.all([changes.refetch(), invalidateProjectExecution()]);
 }
 async function showDetail(id: string): Promise<void> {
   detail.value = await projectChangesApi.get(id);
