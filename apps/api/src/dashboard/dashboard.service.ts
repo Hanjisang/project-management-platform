@@ -39,24 +39,28 @@ export class DashboardService {
       highRiskIssueCount,
       pendingMessages,
       taskLoads,
+      pendingSopTaskCount,
+      overdueChecklistCount,
+      requiredDeliverableNotSubmittedCount,
+      pendingDeliverableReviewCount,
     ] = await Promise.all([
-      this.prisma.task.findMany({
+      this.prisma.projectWorkItem.findMany({
         where: {
           projectId: { in: projectIds },
-          dueDate: { lt: today },
+          plannedEndDate: { lt: today },
           status: { notIn: ['DONE', 'CANCELLED'] },
         },
         include: {
           project: { select: { id: true, name: true } },
           owner: { select: { id: true, displayName: true } },
         },
-        orderBy: { dueDate: 'asc' },
+        orderBy: { plannedEndDate: 'asc' },
         take: 20,
       }),
-      this.prisma.task.count({
+      this.prisma.projectWorkItem.count({
         where: {
           projectId: { in: projectIds },
-          dueDate: { lt: today },
+          plannedEndDate: { lt: today },
           status: { notIn: ['DONE', 'CANCELLED'] },
         },
       }),
@@ -80,7 +84,7 @@ export class DashboardService {
       this.prisma.message.count({
         where: { projectId: { in: projectIds }, status: 'PENDING_CONFIRMATION' },
       }),
-      this.prisma.task.groupBy({
+      this.prisma.projectWorkItem.groupBy({
         by: ['ownerUserId'],
         where: {
           projectId: { in: projectIds },
@@ -89,6 +93,36 @@ export class DashboardService {
         },
         _count: { _all: true },
         _sum: { progress: true },
+      }),
+      this.prisma.projectWorkItem.count({
+        where: {
+          projectId: { in: projectIds },
+          sourceType: 'SOP',
+          status: { notIn: ['DONE', 'CANCELLED'] },
+        },
+      }),
+      this.prisma.projectChecklistItem.count({
+        where: {
+          required: true,
+          completed: false,
+          workItem: {
+            plannedEndDate: { lt: today },
+            projectId: { in: projectIds },
+          },
+        },
+      }),
+      this.prisma.projectDeliverable.count({
+        where: {
+          required: true,
+          workItem: { projectId: { in: projectIds } },
+          documents: { none: { deletedAt: null } },
+        },
+      }),
+      this.prisma.projectDeliverable.count({
+        where: {
+          workItem: { projectId: { in: projectIds } },
+          documents: { some: { deletedAt: null, status: 'PENDING_REVIEW' } },
+        },
       }),
     ]);
     const ownerIds = taskLoads.flatMap((item) => (item.ownerUserId ? [item.ownerUserId] : []));
@@ -127,6 +161,10 @@ export class DashboardService {
         overdueTaskCount,
         highRiskIssueCount,
         pendingMessageCount: pendingMessages,
+        pendingSopTaskCount,
+        overdueChecklistCount,
+        requiredDeliverableNotSubmittedCount,
+        pendingDeliverableReviewCount,
       },
       upcomingProjects: projects
         .filter(

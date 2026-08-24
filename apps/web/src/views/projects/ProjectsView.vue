@@ -41,6 +41,7 @@ const form = reactive({
   name: '',
   customerName: '',
   managerUserId: '',
+  approverUserId: '',
   plannedStartDate: '',
   plannedGoLiveDate: '',
   description: '',
@@ -51,6 +52,7 @@ function resetCreateForm(): void {
     name: '',
     customerName: '',
     managerUserId: '',
+    approverUserId: '',
     plannedStartDate: '',
     plannedGoLiveDate: '',
     description: '',
@@ -173,6 +175,8 @@ function openProject(row: Project): void {
             ><el-input v-model.trim="form.customerName" /></el-form-item
           ><el-form-item label="项目负责人" required
             ><RemoteUserSelect v-model="form.managerUserId" /></el-form-item
+          ><el-form-item label="审批负责人" required
+            ><RemoteUserSelect v-model="form.approverUserId" /></el-form-item
           ><el-form-item label="计划开始"
             ><el-date-picker
               v-model="form.plannedStartDate"
@@ -194,7 +198,13 @@ function openProject(row: Project): void {
         ><el-button
           type="primary"
           :loading="create.isPending.value"
-          :disabled="!form.code || !form.name || !form.customerName || !form.managerUserId"
+          :disabled="
+            !form.code ||
+            !form.name ||
+            !form.customerName ||
+            !form.managerUserId ||
+            !form.approverUserId
+          "
           @click="create.mutate()"
           >创建</el-button
         ></template

@@ -186,6 +186,42 @@ a:focus-visible {
   background: rgb(255 255 255 / 96%);
   backdrop-filter: blur(8px);
 }
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.icon-button {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.notification-menu {
+  max-width: min(360px, 88vw);
+}
+
+.notification-entry {
+  display: grid;
+  max-width: 320px;
+  gap: 3px;
+  white-space: normal;
+}
+
+.notification-entry small {
+  color: var(--text-muted);
+}
+
+.notification-unread .notification-entry strong::before {
+  content: '• ';
+  color: var(--primary);
+}
 .topbar h1 {
   margin: 1px 0 0;
   font-size: 20px;

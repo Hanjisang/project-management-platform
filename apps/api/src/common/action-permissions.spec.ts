@@ -1,6 +1,6 @@
 import { PERMISSIONS } from '@pmp/shared-constants';
 import { describe, expect, it } from 'vitest';
-import { TasksController } from '../tasks/tasks.controller';
+import { WorkItemsController } from '../work-items/work-items.controller';
 import { IssuesController } from '../issues/issues.controller';
 import { PERMISSIONS_KEY } from './decorators';
 
@@ -11,7 +11,7 @@ function actionPermissions(target: object, method: string): string[] {
 
 describe('business action permission metadata', () => {
   it('requires task.complete on the completion endpoint', () => {
-    expect(actionPermissions(TasksController.prototype, 'complete')).toEqual([
+    expect(actionPermissions(WorkItemsController.prototype, 'complete')).toEqual([
       PERMISSIONS.TASK_COMPLETE,
     ]);
   });

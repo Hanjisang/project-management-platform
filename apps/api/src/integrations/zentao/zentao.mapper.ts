@@ -1,15 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import type { Task } from '@prisma/client';
+import type { ProjectWorkItem } from '@prisma/client';
 
 @Injectable()
 export class ZentaoMapper {
-  toExternal(task: Task) {
+  toExternal(task: ProjectWorkItem) {
     return {
-      name: task.title,
+      name: task.name,
       desc: task.description ?? '',
       pri: { LOW: 4, MEDIUM: 3, HIGH: 2, URGENT: 1 }[task.priority],
       estimate: 1,
-      deadline: task.dueDate?.toISOString().slice(0, 10) ?? null,
+      deadline: task.plannedEndDate?.toISOString().slice(0, 10) ?? null,
     };
   }
 }

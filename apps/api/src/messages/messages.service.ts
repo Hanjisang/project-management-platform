@@ -37,7 +37,7 @@ const issuePayload = z.object({
   impact: z.number().int().min(1).max(5).optional(),
 });
 const progressPayload = z.object({
-  planTaskId: z.string(),
+  workItemId: z.string(),
   progress: z.number().int().min(0).max(100),
   evidence: z.string().max(2000),
 });
@@ -263,19 +263,49 @@ export class MessagesService {
   ): Promise<{ type: string; id: string }> {
     if (type === 'CREATE_TASK') {
       const payload = taskPayload.parse(raw);
-      const item = await tx.task.create({
+      const plan = await tx.projectPlan.findUnique({ where: { projectId } });
+      if (!plan)
+        throw new BadRequestException({
+          code: 'PROJECT_PLAN_REQUIRED',
+          message: '项目尚未生成执行计划',
+        });
+      let stage = await tx.projectStage.findFirst({
+        where: { planId: plan.id, isCustom: true, name: '临时任务' },
+      });
+      if (!stage) {
+        const aggregate = await tx.projectStage.aggregate({
+          where: { planId: plan.id },
+          _max: { sortOrder: true },
+        });
+        stage = await tx.projectStage.create({
+          data: {
+            planId: plan.id,
+            name: '临时任务',
+            sortOrder: (aggregate._max.sortOrder ?? -1) + 1,
+            isCustom: true,
+          },
+        });
+      }
+      const aggregate = await tx.projectWorkItem.aggregate({
+        where: { planStageId: stage.id },
+        _max: { sortOrder: true },
+      });
+      const item = await tx.projectWorkItem.create({
         data: {
           projectId,
-          title: payload.title,
+          planStageId: stage.id,
+          name: payload.title,
           description: payload.description,
           priority: payload.priority,
-          dueDate: payload.dueDate ? new Date(payload.dueDate) : null,
-          sourceType: 'MESSAGE',
-          sourceId: messageId,
+          plannedEndDate: payload.dueDate ? new Date(payload.dueDate) : null,
+          sourceType: 'MANUAL',
+          sortOrder: (aggregate._max.sortOrder ?? -1) + 1,
+          isCustom: true,
+          required: false,
           createdById: userId,
         },
       });
-      return { type: 'Task', id: item.id };
+      return { type: 'ProjectWorkItem', id: item.id };
     }
     if (type === 'CREATE_ISSUE' || type === 'CREATE_RISK') {
       const payload = issuePayload.parse(raw);
@@ -302,15 +332,15 @@ export class MessagesService {
     }
     if (type === 'UPDATE_PROGRESS') {
       const payload = progressPayload.parse(raw);
-      const task = await tx.projectPlanTask.findFirst({
-        where: { id: payload.planTaskId, stage: { plan: { projectId } } },
+      const task = await tx.projectWorkItem.findFirst({
+        where: { id: payload.workItemId, projectId },
       });
       if (!task)
         throw new BadRequestException({
           code: 'PLAN_TASK_INVALID',
           message: '进度目标节点不属于该项目',
         });
-      await tx.projectPlanTask.update({
+      await tx.projectWorkItem.update({
         where: { id: task.id },
         data: {
           progress: payload.progress,
@@ -320,7 +350,7 @@ export class MessagesService {
         },
       });
       await this.progress.recomputeStage(task.planStageId, tx);
-      return { type: 'ProjectPlanTask', id: task.id };
+      return { type: 'ProjectWorkItem', id: task.id };
     }
     const payload = notePayload.parse(raw);
     const item = await tx.projectNote.create({

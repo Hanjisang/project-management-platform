@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, h, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -13,17 +13,27 @@ import { useAuthStore } from '../../stores/auth';
 import StatusTag from '../../components/StatusTag.vue';
 import ApiErrorView from '../../components/ApiErrorView.vue';
 import ProjectPlanPanel from './ProjectPlanPanel.vue';
+import ProjectExecutionPanel from './ProjectExecutionPanel.vue';
 import ProjectMembersPanel from './ProjectMembersPanel.vue';
 import ProjectDocumentsPanel from './ProjectDocumentsPanel.vue';
+import ProjectChangesPanel from './ProjectChangesPanel.vue';
 import { projectQueryKey } from '../../composables/project-query';
 import type { ProjectHealth } from '@pmp/shared-types';
+import { ApiError } from '../../api/client';
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const projectId = computed(() => String(route.params.id));
-const tab = ref(sessionStorage.getItem(`pmp:project-tab:${projectId.value}`) ?? 'overview');
+const tab = ref(
+  (typeof route.query.tab === 'string' && route.query.tab) ||
+    sessionStorage.getItem(`pmp:project-tab:${projectId.value}`) ||
+    'overview',
+);
 watch(projectId, (id) => {
-  tab.value = sessionStorage.getItem(`pmp:project-tab:${id}`) ?? 'overview';
+  tab.value =
+    (typeof route.query.tab === 'string' && route.query.tab) ||
+    sessionStorage.getItem(`pmp:project-tab:${id}`) ||
+    'overview';
 });
 const client = useQueryClient();
 const editDialog = ref(false);
@@ -32,6 +42,7 @@ const editForm = reactive({
   customerName: '',
   description: '',
   managerUserId: '',
+  approverUserId: '',
   plannedStartDate: '',
   plannedGoLiveDate: '',
   healthOverride: '' as ProjectHealth | '',
@@ -64,8 +75,44 @@ const lifecycle = useMutation({
     await client.invalidateQueries({ queryKey: ['project', projectId.value] });
     await client.invalidateQueries({ queryKey: ['projects'] });
   },
-  onError: (error: Error) => ElMessage.error(error.message),
+  onError: (error: Error) => showLifecycleError(error),
 });
+function showLifecycleError(error: Error): void {
+  const details =
+    error instanceof ApiError ? (error.details as Record<string, unknown>) : undefined;
+  const blockers = details?.missingRequiredDeliverables;
+  if (Array.isArray(blockers) && blockers.length) {
+    const statusLabels: Record<string, string> = {
+      NOT_SUBMITTED: '未上传',
+      DRAFT: '草稿',
+      PENDING_REVIEW: '待审核',
+      REJECTED: '已驳回',
+    };
+    void ElMessageBox.alert(
+      h('div', [
+        h('p', error.message),
+        h(
+          'ul',
+          blockers.map((item) => {
+            const blocker = item as {
+              planTaskName: string;
+              deliverableName: string;
+              reason: string;
+            };
+            return h(
+              'li',
+              `${blocker.planTaskName} / ${blocker.deliverableName}：${statusLabels[blocker.reason] ?? blocker.reason}`,
+            );
+          }),
+        ),
+      ]),
+      '项目暂不可结项',
+      { type: 'warning' },
+    );
+    return;
+  }
+  ElMessage.error(error.message);
+}
 async function action(value: 'start' | 'pause' | 'resume' | 'close'): Promise<void> {
   if (value === 'close')
     await ElMessageBox.confirm('后端将校验计划、任务、高优问题与必需交付物。', '确认项目结项', {
@@ -81,6 +128,7 @@ function openEdit(): void {
     customerName: value.customerName,
     description: value.description ?? '',
     managerUserId: value.managerUserId,
+    approverUserId: value.approverUserId ?? '',
     plannedStartDate: value.plannedStartDate?.slice(0, 10) ?? '',
     plannedGoLiveDate: value.plannedGoLiveDate?.slice(0, 10) ?? '',
     healthOverride: value.health === value.derivedHealth ? '' : value.health,
@@ -128,6 +176,7 @@ function changeTab(value: string | number): void {
           <div class="detail-meta">
             <span>客户：{{ project.data.value.customerName }}</span
             ><span>负责人：{{ project.data.value.manager.displayName }}</span
+            ><span>审批人：{{ project.data.value.approver?.displayName ?? '未配置' }}</span
             ><span>计划上线：{{ project.data.value.plannedGoLiveDate?.slice(0, 10) ?? '-' }}</span>
           </div>
         </div>
@@ -187,7 +236,7 @@ function changeTab(value: string | number): void {
             </article>
             <article class="metric-card">
               <div class="metric-label">执行任务</div>
-              <div class="metric-value">{{ project.data.value._count?.tasks ?? 0 }}</div>
+              <div class="metric-value">{{ project.data.value._count?.workItems ?? 0 }}</div>
             </article>
             <article class="metric-card">
               <div class="metric-label">问题风险</div>
@@ -202,6 +251,8 @@ function changeTab(value: string | number): void {
             <h3>项目说明</h3>
             <p class="muted">{{ project.data.value.description || '暂无说明' }}</p>
           </div></el-tab-pane
+        ><el-tab-pane label="执行中心" name="execution"
+          ><ProjectExecutionPanel :project-id="projectId" /></el-tab-pane
         ><el-tab-pane label="实施计划" name="plan"
           ><ProjectPlanPanel :project-id="projectId" /></el-tab-pane
         ><el-tab-pane label="任务" name="tasks"
@@ -212,13 +263,13 @@ function changeTab(value: string | number): void {
             @retry="tasks.refetch()" />
           <div v-else class="table-wrap">
             <el-table :data="tasks.data.value?.items ?? []"
-              ><el-table-column prop="title" label="任务" min-width="200" /><el-table-column
+              ><el-table-column prop="name" label="任务" min-width="200" /><el-table-column
                 prop="owner.displayName"
                 label="负责人"
                 width="120" /><el-table-column label="状态" width="100"
                 ><template #default="scope"
                   ><StatusTag :value="scope.row.status" /></template></el-table-column
-              ><el-table-column prop="dueDate" label="截止日期" width="120"
+              ><el-table-column prop="plannedEndDate" label="截止日期" width="120"
             /></el-table></div></el-tab-pane
         ><el-tab-pane label="问题风险" name="issues"
           ><ApiErrorView
@@ -240,6 +291,8 @@ function changeTab(value: string | number): void {
             ></el-table></div></el-tab-pane
         ><el-tab-pane label="交付物" name="documents"
           ><ProjectDocumentsPanel :project-id="projectId" /></el-tab-pane
+        ><el-tab-pane label="项目变更" name="changes"
+          ><ProjectChangesPanel :project-id="projectId" /></el-tab-pane
         ><el-tab-pane label="项目消息" name="messages"
           ><ApiErrorView
             v-if="messages.isError.value"
@@ -294,6 +347,13 @@ function changeTab(value: string | number): void {
             ><el-input v-model.trim="editForm.customerName" /></el-form-item
           ><el-form-item label="负责人"
             ><el-select v-model="editForm.managerUserId" style="width: 100%"
+              ><el-option
+                v-for="member in project.data.value?.members ?? []"
+                :key="member.userId"
+                :label="member.user.displayName"
+                :value="member.userId" /></el-select></el-form-item
+          ><el-form-item label="审批负责人"
+            ><el-select v-model="editForm.approverUserId" style="width: 100%"
               ><el-option
                 v-for="member in project.data.value?.members ?? []"
                 :key="member.userId"

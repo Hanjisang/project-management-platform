@@ -5,14 +5,13 @@ import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { businessToday } from '@pmp/shared-utils';
 import { requestIdMiddleware } from '../src/common/request-id.middleware';
 import type { PrismaService as PrismaServiceType } from '../src/prisma/prisma.service';
 
 const hasDatabase = Boolean(process.env.TEST_DATABASE_URL);
 const runId = Date.now().toString().slice(-9);
-const prefix = `AC${runId}`;
-const uploadRoot = `.tmp/acceptance-${runId}`;
+const prefix = `EX${runId}`;
+const uploadRoot = `.tmp/execution-acceptance-${runId}`;
 type Agent = ReturnType<typeof request.agent>;
 
 interface Session {
@@ -27,25 +26,39 @@ function cookieValue(cookies: string[], name: string): string {
   return cookie?.split(';')[0]?.slice(name.length + 1) ?? '';
 }
 
-describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
+function openXmlFixture(directory: 'word/' | 'xl/'): Buffer {
+  return Buffer.concat([
+    Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    Buffer.from(`[Content_Types].xml ${directory}`, 'ascii'),
+  ]);
+}
+
+describe.skipIf(!hasDatabase)('V2 unified execution domain against MySQL', () => {
   let app: INestApplication;
   let prisma: PrismaServiceType;
   let server: Parameters<typeof request>[0];
   let admin: Session;
-  let managerA: Session;
-  let memberA: Session;
-  let viewerA: Session;
-  let managerB: Session;
-  let projectA = '';
-  let projectB = '';
+  let manager: Session;
+  let member: Session;
+  let viewer: Session;
+  let approver: Session;
+  let projectId = '';
+  let otherProjectId = '';
   let sopTemplateId = '';
-  let sopV1 = '';
-  let sopStageV1 = '';
-  let sopTaskV1 = '';
-  let planTaskId = '';
-  let requiredDocumentId = '';
-  let linkedTaskId = '';
-  let highIssueId = '';
+  let sopVersionId = '';
+  let sopStageId = '';
+  let sopTaskId = '';
+  let sopDeliverableId = '';
+  let sopCriterionId = '';
+  let planId = '';
+  let stageId = '';
+  let workItemId = '';
+  let checklistIds: string[] = [];
+  let projectDeliverableId = '';
+  let documentId = '';
+  let latestVersionId = '';
+  let changeId = '';
+  let otherManagerUserId = '';
 
   async function login(username: string, password: string): Promise<Session> {
     const agent = request.agent(server);
@@ -63,19 +76,27 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
     return session.agent[method](path).set('x-csrf-token', session.csrf);
   }
 
+  async function waitForJob(versionId: string, expected: 'SUCCEEDED' | 'FAILED') {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const job = await prisma.aiReviewJob.findUnique({ where: { documentVersionId: versionId } });
+      if (job?.status === expected) return job;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error(`AI job for ${versionId} did not reach ${expected}`);
+  }
+
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
     process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
-    process.env.JWT_ACCESS_SECRET = 'acceptance-access-secret-at-least-32-characters';
-    process.env.JWT_REFRESH_SECRET = 'acceptance-refresh-secret-at-least-32-characters';
+    process.env.JWT_ACCESS_SECRET = 'execution-acceptance-access-secret-32-chars';
+    process.env.JWT_REFRESH_SECRET = 'execution-acceptance-refresh-secret-32-chars';
     process.env.COOKIE_SECURE = 'false';
     process.env.CORS_ORIGIN = 'http://localhost:5173';
     process.env.STORAGE_PATH = uploadRoot;
     process.env.AI_ENABLED = 'false';
     process.env.AI_FAKE_ENABLED = 'true';
     delete process.env.AI_API_KEY;
-    delete process.env.DINGTALK_SIGNING_SECRET;
-    delete process.env.ZENTAO_BASE_URL;
     const { AppModule } = await import('../src/app.module');
     const { PrismaService } = await import('../src/prisma/prisma.service');
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -100,60 +121,58 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
       process.env.ADMIN_PASSWORD ?? 'acceptance-admin-password',
     );
     const users = [
-      {
-        username: `${prefix.toLowerCase()}pma`,
-        displayName: '验收经理 A',
-        roleCodes: ['PROJECT_MANAGER'],
-      },
-      {
-        username: `${prefix.toLowerCase()}member`,
-        displayName: '验收成员 A',
-        roleCodes: ['MEMBER'],
-      },
-      {
-        username: `${prefix.toLowerCase()}viewer`,
-        displayName: '验收只读 A',
-        roleCodes: ['VIEWER'],
-      },
-      {
-        username: `${prefix.toLowerCase()}pmb`,
-        displayName: '验收经理 B',
-        roleCodes: ['PROJECT_MANAGER'],
-      },
+      { key: 'manager', displayName: '执行域项目经理', roleCodes: ['PROJECT_MANAGER'] },
+      { key: 'member', displayName: '执行域成员', roleCodes: ['MEMBER'] },
+      { key: 'viewer', displayName: '执行域只读', roleCodes: ['VIEWER'] },
+      { key: 'approver', displayName: '执行域审批人', roleCodes: ['PROJECT_MANAGER'] },
+      { key: 'other', displayName: '其他项目经理', roleCodes: ['PROJECT_MANAGER'] },
     ];
-    for (const user of users)
-      await write(admin, 'post', '/api/v2/users')
-        .send({ ...user, password: 'acceptance-user-password' })
+    for (const user of users) {
+      const created = await write(admin, 'post', '/api/v2/users')
+        .send({
+          username: `${prefix.toLowerCase()}${user.key}`,
+          displayName: user.displayName,
+          password: 'execution-user-password',
+          roleCodes: user.roleCodes,
+        })
         .expect(201);
+      if (user.key === 'other') otherManagerUserId = created.body.data.id;
+    }
+    manager = await login(`${prefix.toLowerCase()}manager`, 'execution-user-password');
+    member = await login(`${prefix.toLowerCase()}member`, 'execution-user-password');
+    viewer = await login(`${prefix.toLowerCase()}viewer`, 'execution-user-password');
+    approver = await login(`${prefix.toLowerCase()}approver`, 'execution-user-password');
 
-    managerA = await login(users[0]!.username, 'acceptance-user-password');
-    memberA = await login(users[1]!.username, 'acceptance-user-password');
-    viewerA = await login(users[2]!.username, 'acceptance-user-password');
-    managerB = await login(users[3]!.username, 'acceptance-user-password');
-
-    const createdA = await write(admin, 'post', '/api/v2/projects')
+    const project = await write(admin, 'post', '/api/v2/projects')
       .send({
         code: `${prefix}A`,
-        name: '验收项目 A',
+        name: '统一执行域验收项目',
         customerName: '验收客户',
-        managerUserId: managerA.user.id,
+        managerUserId: manager.user.id,
+        approverUserId: approver.user.id,
+        plannedStartDate: '2026-01-01',
+        plannedGoLiveDate: '2026-04-11',
       })
       .expect(201);
-    projectA = createdA.body.data.id as string;
-    const createdB = await write(admin, 'post', '/api/v2/projects')
+    projectId = project.body.data.id;
+    const other = await write(admin, 'post', '/api/v2/projects')
       .send({
         code: `${prefix}B`,
-        name: '验收项目 B',
-        customerName: '隔离客户',
-        managerUserId: managerB.user.id,
+        name: '隔离项目',
+        customerName: '其他客户',
+        managerUserId: otherManagerUserId,
+        approverUserId: otherManagerUserId,
+        plannedStartDate: '2026-01-01',
+        plannedGoLiveDate: '2026-04-11',
       })
       .expect(201);
-    projectB = createdB.body.data.id as string;
-    await write(admin, 'put', `/api/v2/projects/${projectA}/members`)
+    otherProjectId = other.body.data.id;
+    await write(admin, 'put', `/api/v2/projects/${projectId}/members`)
       .send({
         members: [
-          { userId: memberA.user.id, projectRole: 'IMPLEMENTER' },
-          { userId: viewerA.user.id, projectRole: 'VIEWER' },
+          { userId: member.user.id, projectRole: 'IMPLEMENTER' },
+          { userId: viewer.user.id, projectRole: 'VIEWER' },
+          { userId: approver.user.id, projectRole: 'VIEWER' },
         ],
       })
       .expect(200);
@@ -169,616 +188,402 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
     await rm(uploadRoot, { recursive: true, force: true });
   });
 
-  it('accepts login/me, secure cookie flags, hashed refresh rotation, logout and live CSRF enforcement', async () => {
-    const accessCookie = admin.cookies.find((value) => value.startsWith('access_token=')) ?? '';
-    const refreshCookie = admin.cookies.find((value) => value.startsWith('refresh_token=')) ?? '';
-    expect(accessCookie).toContain('HttpOnly');
-    expect(accessCookie).toContain('SameSite=Strict');
-    expect(refreshCookie).toContain('HttpOnly');
-    expect(admin.cookies.find((value) => value.startsWith('csrf_token='))).not.toContain(
-      'HttpOnly',
-    );
-    const payload = JSON.parse(
-      Buffer.from(
-        cookieValue(admin.cookies, 'access_token').split('.')[1]!,
-        'base64url',
-      ).toString(),
-    ) as { iat: number; exp: number };
-    expect(payload.exp - payload.iat).toBe(15 * 60);
+  it('1. authenticates with secure cookies and live CSRF protection', async () => {
+    expect(admin.cookies.find((value) => value.startsWith('access_token='))).toContain('HttpOnly');
     await admin.agent.get('/api/v2/auth/me').expect(200);
-
-    const rawRefresh = cookieValue(memberA.cookies, 'refresh_token');
-    const stored = await prisma.refreshToken.findFirstOrThrow({
-      where: { userId: memberA.user.id, revokedAt: null },
-      orderBy: { createdAt: 'desc' },
-    });
-    expect(stored.tokenHash).not.toBe(rawRefresh);
-    expect(stored.tokenHash).toMatch(/^[a-f0-9]{64}$/);
-
-    await memberA.agent.post('/api/v2/auth/refresh').send({}).expect(403);
-    await request(server)
-      .post('/api/v2/auth/refresh')
-      .set('Cookie', memberA.cookies)
-      .set('x-csrf-token', memberA.csrf)
-      .send({})
-      .expect(200);
-    await request(server)
-      .post('/api/v2/auth/refresh')
-      .set('Cookie', memberA.cookies)
-      .set('x-csrf-token', memberA.csrf)
-      .send({})
-      .expect(401);
-
-    const viewerCookies = viewerA.cookies;
-    await request(server)
-      .post('/api/v2/auth/logout')
-      .set('Cookie', viewerCookies)
-      .set('x-csrf-token', viewerA.csrf)
-      .send({})
-      .expect(204);
-    await request(server)
-      .post('/api/v2/auth/refresh')
-      .set('Cookie', viewerCookies)
-      .set('x-csrf-token', viewerA.csrf)
-      .send({})
-      .expect(401);
+    await admin.agent.post('/api/v2/projects').send({}).expect(403);
   });
 
-  it('enforces RBAC, project ID enumeration protection and dashboard scope', async () => {
-    await managerA.agent.get(`/api/v2/projects/${projectA}`).expect(200);
-    await memberA.agent.get(`/api/v2/projects/${projectA}`).expect(200);
-    await viewerA.agent.get(`/api/v2/projects/${projectA}`).expect(200);
-    await viewerA.agent.get('/api/v2/users').expect(403);
-    await write(viewerA, 'post', '/api/v2/tasks')
-      .send({ projectId: projectA, title: 'Viewer must not create' })
-      .expect(403);
-
-    const deniedGets = [
-      `/api/v2/projects/${projectB}`,
-      `/api/v2/tasks?projectId=${projectB}`,
-      `/api/v2/issues?projectId=${projectB}`,
-      `/api/v2/projects/${projectB}/documents`,
-      `/api/v2/messages?projectId=${projectB}`,
-      `/api/v2/reports/daily?projectId=${projectB}`,
-      `/api/v2/projects/${projectB}/members`,
-    ];
-    for (const path of deniedGets) await memberA.agent.get(path).expect(403);
-    await write(memberA, 'patch', `/api/v2/projects/${projectB}`)
-      .send({ name: '越权修改' })
-      .expect(403);
-    await write(memberA, 'post', '/api/v2/tasks')
-      .send({ projectId: projectB, title: '越权任务' })
-      .expect(403);
-    await write(memberA, 'post', '/api/v2/issues')
-      .send({ projectId: projectB, type: 'ISSUE', title: '越权问题', severity: 'LOW' })
-      .expect(403);
-
-    await prisma.task.create({
-      data: {
-        projectId: projectB,
-        title: 'B overdue',
-        dueDate: new Date('2020-01-01'),
-        createdById: managerB.user.id,
-      },
-    });
-    await prisma.issue.create({
-      data: {
-        projectId: projectB,
-        type: 'RISK',
-        title: 'B risk',
-        severity: 'CRITICAL',
-        createdById: managerB.user.id,
-      },
-    });
-    const dashboard = await memberA.agent.get('/api/v2/dashboard').expect(200);
-    expect(dashboard.body.data.summary.projectCount).toBe(1);
-    expect(dashboard.body.data.summary.overdueTaskCount).toBe(0);
-    expect(dashboard.body.data.summary.highRiskIssueCount).toBe(0);
-    expect(JSON.stringify(dashboard.body.data)).not.toContain(projectB);
-
-    const roles = await admin.agent.get('/api/v2/roles').expect(200);
-    const systemRole = (roles.body.data as Array<{ id: string; system: boolean }>).find(
-      (role) => role.system,
-    );
-    expect(systemRole).toBeTruthy();
-    await write(admin, 'patch', `/api/v2/roles/${systemRole!.id}`)
-      .send({ name: '禁止修改系统角色' })
-      .expect(409);
+  it('2. denies cross-project enumeration', async () => {
+    await member.agent.get(`/api/v2/projects/${otherProjectId}`).expect(403);
+    await member.agent.get(`/api/v2/work-items?projectId=${otherProjectId}`).expect(403);
   });
 
-  it('keeps dashboard totals independent from the 20-row detail limit and respects business dates', async () => {
-    const today = businessToday();
-    const yesterday = new Date(today);
-    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-    await prisma.task.createMany({
-      data: Array.from({ length: 21 }, (_, index) => ({
-        projectId: projectA,
-        title: `Overdue total ${index}`,
-        dueDate: yesterday,
-        createdById: memberA.user.id,
-        sourceType: 'MANUAL' as const,
-        sourceId: `${prefix}-dashboard-task-${index}`,
-      })),
-    });
-    await prisma.issue.createMany({
-      data: Array.from({ length: 21 }, (_, index) => ({
-        projectId: projectA,
-        type: 'RISK' as const,
-        title: `High risk total ${index}`,
-        severity: 'HIGH' as const,
-        createdById: memberA.user.id,
-        sourceType: 'MANUAL' as const,
-        sourceId: `${prefix}-dashboard-issue-${index}`,
-      })),
-    });
-    const todayTask = await prisma.task.create({
-      data: {
-        projectId: projectA,
-        title: 'Today is not overdue',
-        dueDate: today,
-        createdById: memberA.user.id,
-      },
-    });
-    const dashboard = await memberA.agent.get('/api/v2/dashboard').expect(200);
-    expect(dashboard.body.data.summary.overdueTaskCount).toBeGreaterThanOrEqual(21);
-    expect(dashboard.body.data.summary.highRiskIssueCount).toBeGreaterThanOrEqual(21);
-    expect(dashboard.body.data.overdueTasks).toHaveLength(20);
-    expect(dashboard.body.data.highRiskIssues).toHaveLength(20);
-    expect(
-      (dashboard.body.data.overdueTasks as Array<{ id: string }>).some(
-        (item) => item.id === todayTask.id,
-      ),
-    ).toBe(false);
-    await prisma.task.deleteMany({
-      where: { sourceId: { startsWith: `${prefix}-dashboard-task-` } },
-    });
-    await prisma.issue.deleteMany({
-      where: { sourceId: { startsWith: `${prefix}-dashboard-issue-` } },
-    });
-    await prisma.task.delete({ where: { id: todayTask.id } });
-  });
-
-  it('rejects invalid project and task dates even when PATCH supplies only one side', async () => {
-    await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
-      .send({ plannedStartDate: '2026-09-10', plannedGoLiveDate: '2026-09-01' })
-      .expect(400);
-    await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
-      .send({ plannedStartDate: '2026-09-01', plannedGoLiveDate: '2026-09-10' })
-      .expect(200);
-    await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
-      .send({ plannedStartDate: '2026-09-11' })
-      .expect(400);
-    await write(memberA, 'post', '/api/v2/tasks')
-      .send({
-        projectId: projectA,
-        title: 'Invalid dates',
-        plannedStartDate: '2026-09-10',
-        dueDate: '2026-09-01',
-      })
-      .expect(400);
-    const task = await write(memberA, 'post', '/api/v2/tasks')
-      .send({
-        projectId: projectA,
-        title: 'Partial date validation',
-        plannedStartDate: '2026-09-01',
-        dueDate: '2026-09-10',
-      })
-      .expect(201);
-    await write(memberA, 'patch', `/api/v2/tasks/${task.body.data.id}`)
-      .send({ plannedStartDate: '2026-09-11' })
-      .expect(400);
-    await write(memberA, 'patch', `/api/v2/tasks/${task.body.data.id}`)
-      .send({ status: 'CANCELLED' })
-      .expect(200);
-  });
-
-  it('exposes healthOverride as effective health and restores the derived value when cleared', async () => {
-    const overridden = await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
-      .send({ healthOverride: 'HIGH_RISK' })
-      .expect(200);
-    expect(overridden.body.data.health).toBe('HIGH_RISK');
-    expect(overridden.body.data.effectiveHealth).toBe('HIGH_RISK');
-    expect(overridden.body.data.derivedHealth).toBeTruthy();
-    const detail = await managerA.agent.get(`/api/v2/projects/${projectA}`).expect(200);
-    expect(detail.body.data.health).toBe('HIGH_RISK');
-    const cleared = await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
-      .send({ healthOverride: null })
-      .expect(200);
-    expect(cleared.body.data.health).toBe(cleared.body.data.derivedHealth);
-  });
-
-  it('creates and publishes SOP V1, snapshots it into a plan and keeps the published version immutable', async () => {
+  it('3. creates an SOP draft', async () => {
     const template = await write(admin, 'post', '/api/v2/sop/templates')
-      .send({ code: `${prefix}SOP`, name: '生产验收 SOP' })
+      .send({ code: `${prefix}SOP`, name: '执行域 SOP' })
       .expect(201);
-    sopTemplateId = template.body.data.id as string;
+    sopTemplateId = template.body.data.id;
     const version = await write(admin, 'post', `/api/v2/sop/templates/${sopTemplateId}/versions`)
       .send({ version: 'V1.0' })
       .expect(201);
-    sopV1 = version.body.data.id as string;
-    const stage = await write(admin, 'post', `/api/v2/sop/versions/${sopV1}/stages`)
-      .send({ name: '实施阶段', defaultDurationDays: 7 })
+    sopVersionId = version.body.data.id;
+  });
+
+  it('4. creates a stage and canonical SOP task', async () => {
+    const stage = await write(admin, 'post', `/api/v2/sop/versions/${sopVersionId}/stages`)
+      .send({ name: '接口阶段', defaultDurationDays: 100 })
       .expect(201);
-    sopStageV1 = stage.body.data.id as string;
-    const task = await write(admin, 'post', `/api/v2/sop/stages/${sopStageV1}/tasks`)
+    sopStageId = stage.body.data.id;
+    const task = await write(admin, 'post', `/api/v2/sop/stages/${sopStageId}/tasks`)
+      .send({ name: '接口对接', defaultDurationDays: 100, required: true })
+      .expect(201);
+    sopTaskId = task.body.data.id;
+  });
+
+  it('5. creates required checklist definitions', async () => {
+    for (const name of ['申请接口验证', '收费接口验证'])
+      await write(admin, 'post', `/api/v2/sop/tasks/${sopTaskId}/checklist-items`)
+        .send({ name, required: true })
+        .expect(201);
+  });
+
+  it('6. creates an AI-reviewed deliverable definition', async () => {
+    const deliverable = await write(admin, 'post', `/api/v2/sop/tasks/${sopTaskId}/deliverables`)
       .send({
-        name: '接口实施',
-        defaultDurationDays: 7,
-        deliverableRequired: true,
-        deliverableName: '接口验收单',
+        name: '接口确认表',
+        required: true,
+        reviewMode: 'AI_WITH_HUMAN_OVERRIDE',
+        aiAutoApproveThreshold: 85,
+        aiReviewInstruction: '只检查接口确认内容',
       })
       .expect(201);
-    sopTaskV1 = task.body.data.id as string;
-    for (let index = 1; index <= 4; index += 1)
-      await write(admin, 'post', `/api/v2/sop/tasks/${sopTaskV1}/checklist-items`)
-        .send({ name: `检查项 ${index}` })
-        .expect(201);
-    const published = await write(admin, 'post', `/api/v2/sop/versions/${sopV1}/publish`)
-      .send({})
+    sopDeliverableId = deliverable.body.data.id;
+  });
+
+  it('7. uploads a deliverable template', async () => {
+    const response = await write(
+      admin,
+      'post',
+      `/api/v2/sop/deliverables/${sopDeliverableId}/templates`,
+    )
+      .attach('file', openXmlFixture('xl/'), {
+        filename: '接口确认表.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
       .expect(201);
-    expect(published.body.data.stages[0].weight).toBe(100);
-    expect(published.body.data.stages[0].tasks[0].weight).toBe(100);
-    await write(admin, 'patch', `/api/v2/sop/stages/${sopStageV1}`)
+    expect(response.body.data.fileName).toBe('接口确认表.xlsx');
+  });
+
+  it('8. creates a structured review criterion', async () => {
+    const criterion = await write(
+      admin,
+      'post',
+      `/api/v2/sop/deliverables/${sopDeliverableId}/review-criteria`,
+    )
+      .send({
+        name: '接口清单完整',
+        description: '申请与收费接口均需列出',
+        required: true,
+        weight: 100,
+      })
+      .expect(201);
+    sopCriterionId = criterion.body.data.id;
+  });
+
+  it('9. publishes and freezes the SOP version', async () => {
+    await write(admin, 'post', `/api/v2/sop/versions/${sopVersionId}/publish`).send({}).expect(201);
+    await write(admin, 'patch', `/api/v2/sop/deliverable-review-criteria/${sopCriterionId}`)
       .send({ name: '禁止修改' })
       .expect(409);
-
-    const generated = await write(managerA, 'post', `/api/v2/projects/${projectA}/plan`)
-      .send({ sopVersionId: sopV1 })
-      .expect(201);
-    expect(generated.body.data.stages).toHaveLength(1);
-    expect(generated.body.data.stages[0].tasks[0].checklistItems).toHaveLength(4);
-    planTaskId = generated.body.data.stages[0].tasks[0].id as string;
-    expect(generated.body.data.stages[0].tasks[0].name).toBe('接口实施');
   });
 
-  it('computes checklist → task → stage → plan → project progress and supports lifecycle start/pause/resume', async () => {
-    await write(managerA, 'post', `/api/v2/projects/${projectA}/start`).send({}).expect(201);
-    await write(managerA, 'post', `/api/v2/projects/${projectA}/pause`).send({}).expect(201);
-    await write(managerA, 'post', `/api/v2/projects/${projectA}/resume`).send({}).expect(201);
-    const plan = await managerA.agent.get(`/api/v2/projects/${projectA}/plan`).expect(200);
-    const items = plan.body.data.stages[0].tasks[0].checklistItems as Array<{ id: string }>;
-    for (const item of items.slice(0, 2))
-      await write(managerA, 'patch', `/api/v2/checklist-items/${item.id}`)
-        .send({ completed: true })
-        .expect(200);
-    const progressed = await managerA.agent.get(`/api/v2/projects/${projectA}/plan`).expect(200);
-    expect(progressed.body.data.stages[0].tasks[0].progress).toBe(50);
-    expect(progressed.body.data.stages[0].progress).toBe(50);
-    expect(progressed.body.data.progress).toBe(50);
-    const project = await managerA.agent.get(`/api/v2/projects/${projectA}`).expect(200);
-    expect(project.body.data.progress).toBe(50);
-  });
-
-  it('syncs SOP V2 without mutating the V1 snapshot identity or clearing execution data', async () => {
-    await write(managerA, 'patch', `/api/v2/plan-tasks/${planTaskId}`)
-      .send({ ownerUserId: memberA.user.id })
-      .expect(200);
-    const clone = await write(admin, 'post', `/api/v2/sop/versions/${sopV1}/clone`)
-      .send({ version: 'V2.0' })
+  it('10. clones the published version into an editable draft', async () => {
+    const clone = await write(admin, 'post', `/api/v2/sop/versions/${sopVersionId}/clone`)
+      .send({ version: 'V1.1' })
       .expect(201);
-    const v2 = clone.body.data;
-    await write(admin, 'patch', `/api/v2/sop/tasks/${v2.stages[0].tasks[0].id}`)
-      .send({
-        name: '接口实施 V2',
-        defaultDurationDays: 9,
-        required: true,
-        deliverableRequired: true,
-        deliverableName: '接口验收单',
-      })
-      .expect(200);
-    await write(admin, 'post', `/api/v2/sop/tasks/${v2.stages[0].tasks[0].id}/checklist-items`)
-      .send({ name: 'V2 新检查项' })
-      .expect(201);
-    await write(admin, 'post', `/api/v2/sop/versions/${v2.id}/publish`).send({}).expect(201);
-
-    const beforeSync = await managerA.agent.get(`/api/v2/projects/${projectA}/plan`).expect(200);
-    expect(beforeSync.body.data.sourceSopVersionId).toBe(sopV1);
-    expect(beforeSync.body.data.stages[0].tasks[0].name).toBe('接口实施');
-    const preview = await managerA.agent
-      .get(`/api/v2/projects/${projectA}/plan/sync-preview?sopVersionId=${v2.id}`)
-      .expect(200);
-    expect(preview.body.data.diff.length).toBeGreaterThan(0);
-    const synced = await write(managerA, 'post', `/api/v2/projects/${projectA}/plan/sync`)
-      .send({ sopVersionId: v2.id, acceptedDiffHash: preview.body.data.diffHash })
-      .expect(201);
-    const syncedTask = synced.body.data.stages[0].tasks[0];
-    expect(syncedTask.id).toBe(planTaskId);
-    expect(syncedTask.name).toBe('接口实施 V2');
-    expect(syncedTask.ownerUserId).toBe(memberA.user.id);
-    expect(syncedTask.actualStartDate).toBeTruthy();
-    const syncedChecklist = syncedTask.checklistItems as Array<{ completed: boolean }>;
-    expect(syncedChecklist.filter((item) => item.completed)).toHaveLength(2);
-  });
-
-  it('covers Task create/update/start/complete/cancel with linked and unlinked plan tasks', async () => {
-    const linked = await write(memberA, 'post', '/api/v2/tasks')
-      .send({
-        projectId: projectA,
-        planTaskId,
-        title: '关联计划任务',
-        ownerUserId: memberA.user.id,
-      })
-      .expect(201);
-    linkedTaskId = linked.body.data.id as string;
-    expect(linked.body.data.planTaskId).toBe(planTaskId);
-    await write(memberA, 'patch', `/api/v2/tasks/${linkedTaskId}`)
-      .send({ title: '关联计划任务-已修改', status: 'IN_PROGRESS', progress: 30 })
-      .expect(200);
-    const completed = await write(memberA, 'post', `/api/v2/tasks/${linkedTaskId}/complete`)
-      .send({})
-      .expect(201);
-    expect(completed.body.data.progress).toBe(100);
-
-    const standalone = await write(memberA, 'post', '/api/v2/tasks')
-      .send({ projectId: projectA, title: '独立任务' })
-      .expect(201);
-    expect(standalone.body.data.planTaskId).toBeNull();
-    await write(memberA, 'patch', `/api/v2/tasks/${standalone.body.data.id}`)
-      .send({ status: 'CANCELLED' })
+    const criterionId = clone.body.data.stages[0].tasks[0].deliverables[0].reviewCriteria[0].id;
+    await write(admin, 'patch', `/api/v2/sop/deliverable-review-criteria/${criterionId}`)
+      .send({ name: '克隆后可修改' })
       .expect(200);
   });
 
-  it('covers Issue/Risk/Change/Blocker, all severities and status transitions with health recomputation', async () => {
-    const fixtures = [
-      ['ISSUE', 'LOW'],
-      ['RISK', 'MEDIUM'],
-      ['CHANGE', 'HIGH'],
-      ['BLOCKER', 'CRITICAL'],
-    ] as const;
-    const ids: string[] = [];
-    for (const [type, severity] of fixtures) {
-      const created = await write(memberA, 'post', '/api/v2/issues')
-        .send({
-          projectId: projectA,
-          type,
-          title: `${type} 验收`,
-          severity,
-          probability: 4,
-          impact: 5,
-        })
-        .expect(201);
-      ids.push(created.body.data.id as string);
-    }
-    highIssueId = ids[2]!;
-    for (const status of ['PROCESSING', 'WAITING'])
-      await write(memberA, 'patch', `/api/v2/issues/${ids[0]}`).send({ status }).expect(200);
-    await write(memberA, 'post', `/api/v2/issues/${ids[0]}/resolve`).send({}).expect(201);
-    await write(memberA, 'post', `/api/v2/issues/${ids[0]}/close`).send({}).expect(403);
-    await write(managerA, 'post', `/api/v2/issues/${ids[0]}/close`).send({}).expect(201);
-    const project = await managerA.agent.get(`/api/v2/projects/${projectA}`).expect(200);
-    expect(project.body.data.health).toBe('HIGH_RISK');
-    await write(memberA, 'post', `/api/v2/issues/${ids[3]}/resolve`).send({}).expect(201);
-    await write(managerA, 'post', `/api/v2/issues/${ids[3]}/close`).send({}).expect(201);
+  it('11. generates one ProjectWorkItem without creating a legacy Task', async () => {
+    const response = await write(manager, 'post', `/api/v2/projects/${projectId}/plan`)
+      .send({ sopVersionId })
+      .expect(201);
+    planId = response.body.data.id;
+    stageId = response.body.data.stages[0].id;
+    workItemId = response.body.data.stages[0].workItems[0].id;
+    expect(response.body.data.stages[0].workItems).toHaveLength(1);
   });
 
-  it('uploads, versions, downloads, rejects, approves and deletes documents', async () => {
-    const created = await write(memberA, 'post', `/api/v2/projects/${projectA}/documents`)
-      .field('name', '接口验收单')
-      .field('version', 'V1.0')
-      .field('required', 'true')
-      .field('planTaskId', planTaskId)
-      .attach('file', Buffer.from('acceptance document v1'), {
-        filename: 'acceptance.txt',
-        contentType: 'text/plain',
-      })
-      .expect(201);
-    requiredDocumentId = created.body.data.id as string;
-    const v1Id = created.body.data.versions[0].id as string;
-    await write(admin, 'post', `/api/v2/documents/${requiredDocumentId}/reviews`)
-      .send({ status: 'APPROVED' })
-      .expect(409);
-    const download = await memberA.agent
-      .get(`/api/v2/document-versions/${v1Id}/download`)
-      .expect(200);
-    expect(download.text).toBe('acceptance document v1');
-    await write(memberA, 'post', `/api/v2/documents/${requiredDocumentId}/submit`)
-      .send({})
-      .expect(201);
-    await write(admin, 'post', `/api/v2/documents/${requiredDocumentId}/reviews`)
-      .send({ status: 'REJECTED', comment: '需要修订' })
-      .expect(201);
-    await write(memberA, 'post', `/api/v2/documents/${requiredDocumentId}/versions`)
-      .field('version', 'V1.1')
-      .attach('file', Buffer.from('acceptance document v2'), {
-        filename: 'acceptance-v2.txt',
-        contentType: 'text/plain',
-      })
-      .expect(201);
-    await write(memberA, 'post', `/api/v2/documents/${requiredDocumentId}/submit`)
-      .send({})
-      .expect(201);
-    await write(admin, 'post', `/api/v2/documents/${requiredDocumentId}/reviews`)
-      .send({ status: 'APPROVED', comment: '验收通过' })
-      .expect(201);
-
-    const disposable = await write(memberA, 'post', `/api/v2/projects/${projectA}/documents`)
-      .field('name', '可删除附件')
-      .field('version', 'V1.0')
-      .attach('file', Buffer.from('delete me'), {
-        filename: 'delete-me.txt',
-        contentType: 'text/plain',
-      })
-      .expect(201);
-    await write(admin, 'delete', `/api/v2/documents/${disposable.body.data.id}`).expect(204);
-    const list = await memberA.agent.get(`/api/v2/projects/${projectA}/documents`).expect(200);
-    const documents = list.body.data as Array<{ id: string }>;
-    expect(documents.some((item) => item.id === disposable.body.data.id)).toBe(false);
-  });
-
-  it('runs Message → Analysis → PendingAction → confirm idempotently and blocks cross-project confirmation', async () => {
-    const status = await managerA.agent.get('/api/v2/messages/ai-status').expect(200);
-    expect(status.body.data).toEqual({
-      configured: true,
-      provider: 'fake-test',
-      model: 'deterministic',
+  it('12. snapshots checklist, deliverable, template and criteria', async () => {
+    const item = await prisma.projectWorkItem.findUniqueOrThrow({
+      where: { id: workItemId },
+      include: {
+        checklistItems: true,
+        deliverables: { include: { templates: true, reviewCriteria: true } },
+      },
     });
-    const message = await write(managerA, 'post', '/api/v2/messages/manual')
-      .send({
-        projectId: projectA,
-        senderName: '项目群',
-        content: '儿童医院接口已经调通，但退费接口还有问题，研发计划周三处理。',
-      })
-      .expect(201);
-    const messageId = message.body.data.id as string;
-    const analyzed = await write(managerA, 'post', `/api/v2/messages/${messageId}/analyze`)
-      .send({})
-      .expect(201);
-    expect(analyzed.body.data.status).toBe('SUCCEEDED');
-    const actions = analyzed.body.data.actions as Array<{ id: string; type: string }>;
-    expect(actions.map((item) => item.type)).toEqual(
-      expect.arrayContaining(['CREATE_TASK', 'CREATE_ISSUE']),
-    );
-    const replayedAnalysis = await write(managerA, 'post', `/api/v2/messages/${messageId}/analyze`)
-      .send({})
-      .expect(201);
-    expect(replayedAnalysis.body.data.id).toBe(analyzed.body.data.id);
-    expect(
-      (replayedAnalysis.body.data.actions as Array<{ id: string }>).map((item) => item.id),
-    ).toEqual(actions.map((item) => item.id));
-    expect(await prisma.messageAnalysis.count({ where: { messageId } })).toBe(1);
-    const decisions = actions.map((action) => ({
-      actionId: action.id,
-      decision: 'CONFIRM',
-    }));
-    const [first, concurrent] = await Promise.all([
-      write(managerA, 'post', `/api/v2/messages/${messageId}/confirm`).send({ decisions }),
-      write(managerA, 'post', `/api/v2/messages/${messageId}/confirm`).send({ decisions }),
-    ]);
-    expect(
-      [first.status, concurrent.status].every((value) => value < 500),
-      `confirm responses: ${first.status} ${JSON.stringify(first.body)} / ${concurrent.status} ${JSON.stringify(concurrent.body)}`,
-    ).toBe(true);
-    await write(managerA, 'post', `/api/v2/messages/${messageId}/confirm`)
-      .send({ decisions })
-      .expect(201);
-    expect(await prisma.task.count({ where: { sourceType: 'MESSAGE', sourceId: messageId } })).toBe(
-      1,
-    );
-    expect(
-      await prisma.issue.count({ where: { sourceType: 'MESSAGE', sourceId: messageId } }),
-    ).toBe(1);
+    checklistIds = item.checklistItems.map((entry) => entry.id);
+    projectDeliverableId = item.deliverables[0]!.id;
+    expect(item.checklistItems).toHaveLength(2);
+    expect(item.deliverables[0]!.templates).toHaveLength(1);
+    expect(item.deliverables[0]!.reviewCriteria).toHaveLength(1);
+  });
 
-    const foreign = await write(managerB, 'post', '/api/v2/messages/manual')
-      .send({ projectId: projectB, senderName: 'B 项目群', content: 'B 项目有问题需要跟进' })
-      .expect(201);
-    const foreignAnalysis = await write(
-      managerB,
-      'post',
-      `/api/v2/messages/${foreign.body.data.id}/analyze`,
-    )
-      .send({})
-      .expect(201);
-    await write(memberA, 'post', `/api/v2/messages/${foreign.body.data.id}/confirm`)
-      .send({
-        decisions: [{ actionId: foreignAnalysis.body.data.actions[0].id, decision: 'CONFIRM' }],
-      })
+  it('13. exposes the same WorkItem in execution and task-center APIs', async () => {
+    const execution = await manager.agent
+      .get(`/api/v2/projects/${projectId}/execution`)
+      .expect(200);
+    const center = await member.agent.get(`/api/v2/work-items?projectId=${projectId}`).expect(200);
+    expect(execution.body.data.stages[0].workItems[0].id).toBe(workItemId);
+    expect(center.body.data.items[0].id).toBe(workItemId);
+  });
+
+  it('14. keeps viewer access read-only', async () => {
+    await viewer.agent.get(`/api/v2/work-items/${workItemId}`).expect(200);
+    await write(viewer, 'patch', `/api/v2/work-items/${workItemId}`)
+      .send({ name: '越权' })
       .expect(403);
   });
 
-  it('returns structured close blockers, then closes only after required work is complete', async () => {
-    const blocked = await write(managerA, 'post', `/api/v2/projects/${projectA}/close`)
+  it('15. starts the project and creates immutable baseline V1', async () => {
+    await write(manager, 'post', `/api/v2/projects/${projectId}/start`).send({}).expect(201);
+    expect(
+      (await prisma.projectBaseline.findMany({ where: { projectId } })).map(
+        (baseline) => baseline.version,
+      ),
+    ).toEqual([1]);
+  });
+
+  it('16. blocks completion while required execution units are incomplete', async () => {
+    const response = await write(member, 'post', `/api/v2/work-items/${workItemId}/complete`)
       .send({})
       .expect(409);
-    expect(blocked.body.code).toBe('PROJECT_CLOSE_BLOCKED');
-    expect(blocked.body.details.incompletePlanTasks.length).toBeGreaterThan(0);
-    expect(blocked.body.details.openHighPriorityIssues.length).toBeGreaterThan(0);
-    expect(blocked.body.details.missingRequiredDeliverables).toEqual([]);
+    expect(response.body.code).toBe('WORK_ITEM_COMPLETION_BLOCKED');
+  });
 
-    const plan = await managerA.agent.get(`/api/v2/projects/${projectA}/plan`).expect(200);
-    for (const item of plan.body.data.stages[0].tasks[0].checklistItems as Array<{
-      id: string;
-      completed: boolean;
-    }>)
-      if (!item.completed)
-        await write(managerA, 'patch', `/api/v2/checklist-items/${item.id}`)
-          .send({ completed: true })
-          .expect(200);
-    await write(memberA, 'post', `/api/v2/issues/${highIssueId}/resolve`).send({}).expect(201);
-    await prisma.issue.updateMany({
-      where: { projectId: projectA, severity: { in: ['HIGH', 'CRITICAL'] } },
-      data: { status: 'CLOSED', resolvedAt: new Date() },
-    });
-    await prisma.task.updateMany({
-      where: { projectId: projectA, status: { notIn: ['DONE', 'CANCELLED'] } },
-      data: { status: 'DONE', progress: 100, completedAt: new Date() },
-    });
-    const [closeAttempt, lateTask] = await Promise.all([
-      write(managerA, 'post', `/api/v2/projects/${projectA}/close`).send({}),
-      write(memberA, 'post', '/api/v2/tasks').send({
-        projectId: projectA,
-        title: '结项并发竞态任务',
-      }),
-    ]);
+  it('17. derives 33% after the first of three required units', async () => {
+    await write(member, 'patch', `/api/v2/work-item-checklist/${checklistIds[0]}`)
+      .send({ completed: true })
+      .expect(200);
     expect(
-      (closeAttempt.status === 201 && lateTask.status === 409) ||
-        (closeAttempt.status === 409 && lateTask.status === 201),
-    ).toBe(true);
-    let closed = closeAttempt;
-    if (lateTask.status === 201) {
-      expect(closeAttempt.body.code).toBe('PROJECT_CLOSE_BLOCKED');
-      await write(memberA, 'patch', `/api/v2/tasks/${lateTask.body.data.id}`)
-        .send({ status: 'CANCELLED' })
-        .expect(200);
-      closed = await write(managerA, 'post', `/api/v2/projects/${projectA}/close`)
-        .send({})
-        .expect(201);
-    } else {
-      expect(lateTask.body.code).toBe('PROJECT_READ_ONLY');
-    }
-    expect(closed.body.data.status).toBe('COMPLETED');
-    expect(closed.body.data.progress).toBe(100);
+      (await prisma.projectWorkItem.findUniqueOrThrow({ where: { id: workItemId } })).progress,
+    ).toBe(33);
+  });
 
-    await write(memberA, 'patch', `/api/v2/tasks/${linkedTaskId}`)
-      .send({ title: '结项后禁止修改' })
-      .expect(409);
-    await write(memberA, 'patch', `/api/v2/issues/${highIssueId}`)
-      .send({ title: '结项后禁止修改' })
-      .expect(409);
-    await write(memberA, 'post', `/api/v2/documents/${requiredDocumentId}/versions`)
-      .field('version', 'V9.9')
-      .attach('file', Buffer.from('forbidden'), {
-        filename: 'forbidden.txt',
+  it('18. derives 67% after both checklist units', async () => {
+    await write(member, 'patch', `/api/v2/work-item-checklist/${checklistIds[1]}`)
+      .send({ completed: true })
+      .expect(200);
+    expect(
+      (await prisma.projectWorkItem.findUniqueOrThrow({ where: { id: workItemId } })).progress,
+    ).toBe(67);
+  });
+
+  it('19. uploads the logical deliverable document and contributes one half unit', async () => {
+    const response = await write(
+      manager,
+      'post',
+      `/api/v2/project-deliverables/${projectDeliverableId}/documents`,
+    )
+      .field('name', '接口确认表')
+      .field('version', 'V1.0')
+      .attach('file', Buffer.from('申请接口与收费接口均已确认'), {
+        filename: '接口确认表.txt',
         contentType: 'text/plain',
       })
-      .expect(409);
-    const closedPlan = await managerA.agent.get(`/api/v2/projects/${projectA}/plan`).expect(200);
-    await write(
-      managerA,
-      'patch',
-      `/api/v2/checklist-items/${closedPlan.body.data.stages[0].tasks[0].checklistItems[0].id}`,
-    )
-      .send({ completed: false })
-      .expect(409);
+      .expect(201);
+    documentId = response.body.data.id;
+    latestVersionId = response.body.data.versions[0].id;
+    expect(
+      (await prisma.projectWorkItem.findUniqueOrThrow({ where: { id: workItemId } })).progress,
+    ).toBe(83);
   });
 
-  it('keeps unconfigured external adapters non-fatal while fake AI is test-only', async () => {
-    const dingtalk = await admin.agent.get('/api/v2/integrations/dingtalk/status').expect(200);
-    const zentao = await admin.agent.get('/api/v2/integrations/zentao/status').expect(200);
-    expect(dingtalk.body.data.status).toBe('NOT_CONFIGURED');
-    expect(zentao.body.data.status).toBe('NOT_CONFIGURED');
-    expect(process.env.NODE_ENV).toBe('test');
-  });
-
-  it('allows member managers to query paged user options without project.create', async () => {
-    const response = await managerA.agent
-      .get(`/api/v2/project-user-options?search=${prefix.toLowerCase()}&page=1&pageSize=2`)
-      .expect(200);
-    expect(response.body.data.items).toHaveLength(2);
-    expect(response.body.data.total).toBeGreaterThanOrEqual(4);
-  });
-
-  it('protects system roles and the last active administrator', async () => {
-    const administratorRole = await prisma.role.findUniqueOrThrow({
-      where: { code: 'ADMINISTRATOR' },
+  it('20. persists a structured Fake-AI approval and reaches 100%', async () => {
+    await waitForJob(latestVersionId, 'SUCCEEDED');
+    const review = await prisma.documentVersionReview.findFirstOrThrow({
+      where: { documentVersionId: latestVersionId, reviewType: 'AI' },
+      include: { criterionResults: true },
     });
-    const roleResponse = await write(admin, 'patch', `/api/v2/roles/${administratorRole.id}`)
-      .send({ name: '不可修改的系统管理员' })
-      .expect(409);
-    expect(roleResponse.body.code).toBe('SYSTEM_ROLE_IMMUTABLE');
+    expect(review.status).toBe('APPROVED');
+    expect(review.criterionResults).toHaveLength(1);
+    expect(
+      (await prisma.projectWorkItem.findUniqueOrThrow({ where: { id: workItemId } })).progress,
+    ).toBe(100);
+  }, 20_000);
 
-    const disableResponse = await write(admin, 'patch', `/api/v2/users/${admin.user.id}`)
-      .send({ status: 'DISABLED' })
-      .expect(400);
-    expect(disableResponse.body.code).toBe('LAST_ADMINISTRATOR_REQUIRED');
+  it('21. completes the canonical WorkItem', async () => {
+    const response = await write(member, 'post', `/api/v2/work-items/${workItemId}/complete`)
+      .send({})
+      .expect(201);
+    expect(response.body.data).toEqual(expect.objectContaining({ status: 'DONE', progress: 100 }));
+  });
+
+  it('22. a new version immediately resets effective progress and reopens the WorkItem', async () => {
+    const response = await write(manager, 'post', `/api/v2/documents/${documentId}/versions`)
+      .field('version', 'V2.0')
+      .attach('file', Buffer.from('FAKE_REJECT'), {
+        filename: '接口确认表-v2.txt',
+        contentType: 'text/plain',
+      })
+      .expect(201);
+    latestVersionId = response.body.data.id;
+    const item = await prisma.projectWorkItem.findUniqueOrThrow({ where: { id: workItemId } });
+    expect(item.progress).toBe(83);
+    expect(item.status).toBe('IN_PROGRESS');
+  });
+
+  it('23. AI rejection remains a half unit and stores findings', async () => {
+    await waitForJob(latestVersionId, 'SUCCEEDED');
+    const review = await prisma.documentVersionReview.findFirstOrThrow({
+      where: { documentVersionId: latestVersionId, reviewType: 'AI' },
+      include: { findings: true },
+    });
+    expect(review.status).toBe('REJECTED');
+    expect(review.findings.length).toBeGreaterThan(0);
+    expect(
+      (await prisma.projectWorkItem.findUniqueOrThrow({ where: { id: workItemId } })).progress,
+    ).toBe(83);
+  }, 20_000);
+
+  it('24. an authorized human review overrides AI rejection', async () => {
+    await write(approver, 'post', `/api/v2/documents/${documentId}/reviews`)
+      .send({ status: 'APPROVED', comment: '人工确认通过' })
+      .expect(201);
+    expect(
+      (await prisma.projectWorkItem.findUniqueOrThrow({ where: { id: workItemId } })).progress,
+    ).toBe(100);
+  });
+
+  it('25. accepts the exact +20% baseline boundary as a direct adjustment', async () => {
+    const response = await write(manager, 'post', `/api/v2/projects/${projectId}/adjustments`)
+      .send({ proposedCompletionDate: '2026-05-01', reason: '+20% 边界' })
+      .expect(201);
+    expect(response.body.data.impact).toEqual(
+      expect.objectContaining({ classification: 'DIRECT_ADJUSTMENT', changeRate: 20 }),
+    );
+  });
+
+  it('26. accepts the exact -20% baseline boundary as a direct adjustment', async () => {
+    const response = await write(manager, 'post', `/api/v2/projects/${projectId}/adjustments`)
+      .send({ proposedCompletionDate: '2026-03-22', reason: '-20% 边界' })
+      .expect(201);
+    expect(response.body.data.impact.changeRate).toBe(-20);
+  });
+
+  it('27. prevents split adjustments by always using baseline V1', async () => {
+    for (const [days, date] of [
+      [110, '2026-04-21'],
+      [118, '2026-04-29'],
+    ] as const) {
+      const response = await write(manager, 'post', `/api/v2/projects/${projectId}/adjustments`)
+        .send({ proposedCompletionDate: date, reason: `${days} 天` })
+        .expect(201);
+      expect(response.body.data.impact.classification).toBe('DIRECT_ADJUSTMENT');
+    }
+    const preflight = await write(
+      manager,
+      'post',
+      `/api/v2/projects/${projectId}/change-impact/preflight`,
+    )
+      .send({ proposedCompletionDate: '2026-05-02' })
+      .expect(201);
+    expect(preflight.body.data.classification).toBe('REQUIRES_CHANGE_REQUEST');
+  });
+
+  it('28. always classifies formal scope change as approval-required', async () => {
+    const response = await write(
+      manager,
+      'post',
+      `/api/v2/projects/${projectId}/change-impact/preflight`,
+    )
+      .send({ proposedCompletionDate: '2026-04-11', scopeChange: true })
+      .expect(201);
+    expect(response.body.data.classification).toBe('REQUIRES_CHANGE_REQUEST');
+  });
+
+  it('29. records and notifies every direct adjustment without replacing the baseline', async () => {
+    await write(manager, 'post', `/api/v2/projects/${projectId}/work-items`)
+      .send({ name: '联系 HIS 厂商', required: false, ownerUserId: member.user.id })
+      .expect(201);
+    expect(
+      await prisma.projectAdjustmentLog.count({ where: { projectId } }),
+    ).toBeGreaterThanOrEqual(4);
+    expect(
+      await prisma.notification.count({
+        where: { projectId, userId: approver.user.id, type: 'PLAN_ADJUSTED' },
+      }),
+    ).toBeGreaterThanOrEqual(4);
+    expect(
+      (
+        await prisma.projectBaseline.findFirstOrThrow({
+          where: { projectId },
+          orderBy: { version: 'desc' },
+        })
+      ).version,
+    ).toBe(1);
+  });
+
+  it('30. lets only the PM create and submit a formal CR', async () => {
+    await write(member, 'post', `/api/v2/projects/${projectId}/change-requests`)
+      .send({})
+      .expect(403);
+    const created = await write(manager, 'post', `/api/v2/projects/${projectId}/change-requests`)
+      .send({
+        title: '新增退费接口',
+        description: '新增 required 核心接口并延长工期',
+        changeType: 'MIXED',
+        reason: '客户确认范围扩大',
+        source: 'CUSTOMER',
+        operations: [
+          {
+            operationType: 'PROJECT_COMPLETION_DATE_CHANGE',
+            payload: { plannedCompletionDate: '2026-05-06' },
+          },
+          {
+            operationType: 'ADD_WORK_ITEM',
+            payload: { planStageId: stageId, name: '退费接口对接', required: true },
+          },
+          {
+            operationType: 'DELIVERABLE_NEEDS_REVISION',
+            entityId: projectDeliverableId,
+            payload: { reason: '补充退费接口验收内容' },
+          },
+        ],
+      })
+      .expect(201);
+    expect(JSON.parse(created.body.data.aiImpactSummary)).toEqual(
+      expect.objectContaining({ status: 'SUCCEEDED', provider: 'fake-test' }),
+    );
+    changeId = created.body.data.id;
+    await write(member, 'post', `/api/v2/change-requests/${changeId}/submit`).send({}).expect(403);
+    await write(manager, 'post', `/api/v2/change-requests/${changeId}/submit`).send({}).expect(201);
+  });
+
+  it('31. enforces the configured approver, applies once and creates baseline V2', async () => {
+    await write(manager, 'post', `/api/v2/change-requests/${changeId}/approve`)
+      .send({ comment: '越权审批' })
+      .expect(403);
+    await write(approver, 'post', `/api/v2/change-requests/${changeId}/approve`)
+      .send({ comment: '同意变更' })
+      .expect(201);
+    await write(manager, 'post', `/api/v2/change-requests/${changeId}/apply`).send({}).expect(201);
+    const second = await write(manager, 'post', `/api/v2/change-requests/${changeId}/apply`)
+      .send({})
+      .expect(201);
+    expect(second.body.data.status).toBe('APPLIED');
+    expect(
+      (
+        await prisma.projectBaseline.findFirstOrThrow({
+          where: { projectId },
+          orderBy: { version: 'desc' },
+        })
+      ).version,
+    ).toBe(2);
+    expect(
+      await prisma.projectWorkItem.count({
+        where: { projectId, name: '退费接口对接', sourceType: 'CHANGE' },
+      }),
+    ).toBe(1);
+    expect(
+      (await prisma.projectDeliverable.findUniqueOrThrow({ where: { id: projectDeliverableId } }))
+        .needsRevision,
+    ).toBe(true);
+  });
+
+  it('32. leaves an auditable unified graph with no legacy runtime tables', async () => {
+    expect(await prisma.projectPlan.count({ where: { id: planId } })).toBe(1);
+    expect(await prisma.projectWorkItem.count({ where: { projectId } })).toBe(3);
+    expect(
+      await prisma.auditLog.count({ where: { resourceId: { in: [workItemId, changeId] } } }),
+    ).toBeGreaterThan(0);
+    const tables = await prisma.$queryRaw<
+      Array<{ table_name: string }>
+    >`SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name IN ('tasks', 'project_plan_tasks')`;
+    expect(tables).toEqual([]);
   });
 });

@@ -37,6 +37,15 @@ async function main(): Promise<void> {
                     defaultDurationDays: 5,
                     weight: 100,
                     required: true,
+                    deliverables: {
+                      create: [
+                        {
+                          name: '环境与资料确认记录',
+                          sortOrder: 0,
+                          required: true,
+                        },
+                      ],
+                    },
                     checklistItems: {
                       create: [{ name: '环境部署记录已确认', sortOrder: 0, required: true }],
                     },
@@ -57,9 +66,16 @@ async function main(): Promise<void> {
                     defaultDurationDays: 5,
                     weight: 34,
                     required: true,
-                    deliverableRequired: true,
-                    deliverableName: '接口文档确认记录',
-                    deliverableTemplate: '接口文档确认记录.docx',
+                    deliverables: {
+                      create: [
+                        {
+                          name: '接口文档确认记录',
+                          description: '请在草稿版本中上传正式模板文件。',
+                          sortOrder: 0,
+                          required: true,
+                        },
+                      ],
+                    },
                   },
                   {
                     name: '接口开发联调',
@@ -84,9 +100,16 @@ async function main(): Promise<void> {
                     defaultDurationDays: 5,
                     weight: 100,
                     required: true,
-                    deliverableRequired: true,
-                    deliverableName: '上线确认单',
-                    deliverableTemplate: '上线确认单.docx',
+                    deliverables: {
+                      create: [
+                        {
+                          name: '上线确认单',
+                          description: '请在草稿版本中上传正式模板文件。',
+                          sortOrder: 0,
+                          required: true,
+                        },
+                      ],
+                    },
                   },
                 ],
               },

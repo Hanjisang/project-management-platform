@@ -6,7 +6,7 @@ describe('AI analysis validation', () => {
     const result = aiAnalysisSchema.safeParse({
       project: { id: null, name: '', confidence: 0 },
       summary: '',
-      progressUpdates: [{ planTaskId: 'x', progress: 101, evidence: '' }],
+      progressUpdates: [{ workItemId: 'x', progress: 101, evidence: '' }],
       issues: [],
       risks: [],
       tasks: [],

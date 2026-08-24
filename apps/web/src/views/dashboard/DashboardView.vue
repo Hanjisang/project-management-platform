@@ -10,6 +10,10 @@ const metrics = [
   ['WARNING', '预警项目', '需要关注'],
   ['HIGH_RISK', '高风险项目', '需要立即介入'],
   ['overdueTaskCount', '逾期任务', '尚未完成'],
+  ['pendingSopTaskCount', '待完成 SOP Task', '计划自动生成的主任务'],
+  ['overdueChecklistCount', 'Checklist 逾期', '必需检查项未完成'],
+  ['requiredDeliverableNotSubmittedCount', '待提交必交资料', '尚未上传文档'],
+  ['pendingDeliverableReviewCount', '待审核交付物', '已提交等待审核'],
   ['pendingMessageCount', '待确认消息', 'AI 不会直接入库'],
 ] as const;
 </script>

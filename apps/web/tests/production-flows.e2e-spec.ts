@@ -14,7 +14,7 @@ const prefix = `PW${runId}`;
 const projectName = `Playwright 项目 ${runId}`;
 const projectBName = `隔离项目 B ${runId}`;
 const password = 'playwright-user-password';
-const baseURL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:5173';
+const baseURL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:5174';
 let adminApi: APIRequestContext;
 let memberApi: APIRequestContext;
 let viewerApi: APIRequestContext;
@@ -31,14 +31,17 @@ let projectBId = '';
 let templateId = '';
 let versionId = '';
 let documentId = '';
+let sopDeliverableId = '';
+let projectDeliverableId = '';
 
 function token(state: Awaited<ReturnType<APIRequestContext['storageState']>>): string {
   return state.cookies.find((cookie) => cookie.name === 'csrf_token')?.value ?? '';
 }
 
 async function data(response: Awaited<ReturnType<APIRequestContext['get']>>) {
-  expect(response.ok(), await response.text()).toBe(true);
-  return ((await response.json()) as { data: Record<string, any> }).data;
+  const body = await response.text();
+  expect(response.ok(), `${response.status()} ${body}`).toBe(true);
+  return (JSON.parse(body) as { data: Record<string, any> }).data;
 }
 
 async function write(
@@ -98,6 +101,9 @@ test.beforeAll(async () => {
     name: projectName,
     customerName: 'Playwright 客户',
     managerUserId: managerId,
+    approverUserId: managerId,
+    plannedStartDate: '2026-01-01',
+    plannedGoLiveDate: '2026-04-11',
   });
   projectId = project.id;
   const projectB = await write(adminApi, csrf, 'post', '/api/v2/projects', {
@@ -105,6 +111,9 @@ test.beforeAll(async () => {
     name: projectBName,
     customerName: '隔离客户',
     managerUserId: managerId,
+    approverUserId: managerId,
+    plannedStartDate: '2026-01-01',
+    plannedGoLiveDate: '2026-04-11',
   });
   projectBId = projectB.id;
   await write(adminApi, csrf, 'put', `/api/v2/projects/${projectId}/members`, {
@@ -138,7 +147,29 @@ test.beforeAll(async () => {
     `/api/v2/sop/stages/${stage.id}/tasks`,
     { name: 'E2E 计划任务', defaultDurationDays: 5 },
   );
-  for (const name of ['E2E 检查一', 'E2E 检查二'])
+  const deliverable = await write(
+    adminApi,
+    csrf,
+    'post',
+    `/api/v2/sop/tasks/${taskDefinition.id}/deliverables`,
+    { name: 'E2E 验收报告', description: '端到端验收所需的实际交付物', required: true },
+  );
+  sopDeliverableId = deliverable.id;
+  const templateUpload = await adminApi.post(
+    `/api/v2/sop/deliverables/${sopDeliverableId}/templates`,
+    {
+      headers: { 'x-csrf-token': csrf },
+      multipart: {
+        file: {
+          name: 'e2e-deliverable-template.txt',
+          mimeType: 'text/plain',
+          buffer: Buffer.from('E2E deliverable template'),
+        },
+      },
+    },
+  );
+  await data(templateUpload);
+  for (const name of ['E2E 检查一', 'E2E 检查二']) {
     await write(
       adminApi,
       csrf,
@@ -146,10 +177,12 @@ test.beforeAll(async () => {
       `/api/v2/sop/tasks/${taskDefinition.id}/checklist-items`,
       { name },
     );
+  }
   await write(adminApi, csrf, 'post', `/api/v2/sop/versions/${versionId}/publish`);
-  await write(adminApi, csrf, 'post', `/api/v2/projects/${projectId}/plan`, {
+  const plan = await write(adminApi, csrf, 'post', `/api/v2/projects/${projectId}/plan`, {
     sopVersionId: versionId,
   });
+  projectDeliverableId = plan.stages[0].workItems[0].deliverables[0].id;
 
   memberApi = await playwrightRequest.newContext({ baseURL });
   await data(
@@ -180,7 +213,7 @@ test.afterAll(async () => {
     templateId,
     usernamePrefix: prefix.toLowerCase(),
   });
-  await Promise.all([adminApi.dispose(), memberApi.dispose(), viewerApi.dispose()]);
+  await Promise.all([adminApi?.dispose(), memberApi?.dispose(), viewerApi?.dispose()]);
 });
 
 test.beforeEach(async ({ context }) => {
@@ -206,6 +239,8 @@ test('B — published SOP tree is rendered from MySQL', async ({ page }) => {
   await expect(page.getByText('E2E 实施阶段', { exact: true })).toBeVisible();
   await expect(page.getByText('E2E 计划任务', { exact: true })).toBeVisible();
   await expect(page.getByText('□ E2E 检查一')).toBeVisible();
+  await expect(page.getByText('E2E 验收报告', { exact: true })).toBeVisible();
+  await expect(page.getByText('e2e-deliverable-template.txt', { exact: true })).toBeVisible();
   await expect(page.getByText('已发布', { exact: true })).toBeVisible();
 });
 
@@ -214,33 +249,26 @@ test('C — checklist completion propagates plan and project progress in the UI'
   await page.getByRole('tab', { name: '实施计划' }).click();
   await expect(page.getByText('整体进度 0%')).toBeVisible();
   await page.locator('label.el-checkbox').filter({ hasText: 'E2E 检查一' }).click();
-  await expect(page.getByText('整体进度 50%')).toBeVisible();
+  await expect(page.getByText('整体进度 33%')).toBeVisible();
   const project = await data(await adminApi.get(`/api/v2/projects/${projectId}`));
-  expect(project.progress).toBe(50);
+  expect(project.progress).toBe(33);
 });
 
-test('D — creates, starts and completes an execution Task through the UI', async ({ page }) => {
-  const title = `E2E Task ${runId}`;
+test('D — automatically generated SOP Task exposes the shared execution facts', async ({ page }) => {
   await page.goto('/tasks');
-  await page.getByRole('button', { name: '创建任务' }).click();
-  const dialog = page.getByRole('dialog', { name: '创建执行任务' });
-  await dialog.locator('.el-form-item').filter({ hasText: '项目' }).locator('.el-select').click();
-  await page.locator('.el-select-dropdown__item:visible').filter({ hasText: projectName }).click();
-  await dialog.locator('.el-form-item').filter({ hasText: '标题' }).locator('input').fill(title);
-  const createdResponse = page.waitForResponse(
-    (response) => response.url().endsWith('/api/v2/tasks') && response.request().method() === 'POST',
-  );
-  await dialog.getByRole('button', { name: '创建', exact: true }).click();
-  const created = await createdResponse;
-  expect(created.status(), await created.text()).toBe(201);
-  await page.reload();
-  const row = page.locator('.el-table__row').filter({ hasText: title });
+  const row = page.locator('.el-table__row').filter({ hasText: 'E2E 计划任务' });
   await expect(row).toBeVisible();
-  await row.getByRole('button', { name: '开始' }).click();
-  await page.reload();
-  await row.getByRole('button', { name: '完成' }).click();
-  await page.reload();
-  await expect(row.getByText('已完成', { exact: true })).toBeVisible();
+  await expect(row).toContainText('SOP');
+  await expect(row).toContainText('E2E 实施阶段');
+  await expect(row).toContainText('1/2');
+  await expect(row).toContainText('0/1');
+  await row.getByRole('button', { name: '详情' }).click();
+  const drawer = page.getByRole('dialog', { name: '任务详情' });
+  await expect(drawer.getByText('执行检查项')).toBeVisible();
+  await expect(drawer.getByText('E2E 检查一', { exact: false })).toBeVisible();
+  await expect(drawer.getByText('E2E 检查二', { exact: false })).toBeVisible();
+  await expect(drawer.getByText('E2E 验收报告', { exact: true })).toBeVisible();
+  await expect(drawer.getByRole('link', { name: 'e2e-deliverable-template.txt' })).toBeVisible();
 });
 
 test('E — HIGH Risk changes dashboard health and can be closed through the UI', async ({ page }) => {
@@ -267,11 +295,20 @@ test('E — HIGH Risk changes dashboard health and can be closed through the UI'
   await expect(page.locator('.el-table__row').filter({ hasText: title })).toContainText('已关闭');
 });
 
-test('F — uploads and approves a real Document without committing a fixture file', async ({ page }) => {
+test('F — downloads the snapshot template, uploads the actual deliverable and approves it', async ({
+  page,
+}) => {
   await page.goto(`/projects/${projectId}`);
-  await page.getByRole('tab', { name: '交付物' }).click();
-  await page.getByRole('button', { name: '上传文档' }).click();
-  const dialog = page.getByRole('dialog', { name: '上传交付文档' });
+  await page.getByRole('tab', { name: '实施计划' }).click();
+  const templateDownload = page.waitForEvent('download');
+  await page.getByRole('link', { name: /e2e-deliverable-template\.txt/ }).click();
+  expect((await templateDownload).suggestedFilename()).toBe('e2e-deliverable-template.txt');
+
+  const deliverableCard = page
+    .locator('.project-deliverable-card')
+    .filter({ hasText: 'E2E 验收报告' });
+  await deliverableCard.getByRole('button', { name: '上传交付物' }).click();
+  const dialog = page.getByRole('dialog', { name: '上传实际交付物' });
   await dialog.locator('.el-form-item').filter({ hasText: '文档名称' }).locator('input').fill(`E2E 文档 ${runId}`);
   await dialog.locator('input[type=file]').setInputFiles({
     name: 'playwright-acceptance.txt',
@@ -279,13 +316,29 @@ test('F — uploads and approves a real Document without committing a fixture fi
     buffer: Buffer.from('playwright production acceptance'),
   });
   await dialog.getByRole('button', { name: '上传', exact: true }).click();
-  const row = page.locator('.el-table__row').filter({ hasText: `E2E 文档 ${runId}` });
-  await expect(row).toBeVisible();
+  await expect(
+    deliverableCard.getByText('playwright-acceptance.txt', { exact: true }),
+  ).toBeVisible();
   const documents = await data(await adminApi.get(`/api/v2/projects/${projectId}/documents`));
   documentId = documents.find((item: { name: string }) => item.name === `E2E 文档 ${runId}`).id;
-  await row.getByRole('button', { name: '提交审核' }).click();
-  await row.getByRole('button', { name: '通过' }).click();
-  await expect(row).toContainText('已通过');
+  expect(documents.find((item: { id: string }) => item.id === documentId).projectDeliverableId).toBe(
+    projectDeliverableId,
+  );
+  await deliverableCard.getByRole('button', { name: '通过' }).click();
+  await expect(deliverableCard).toContainText('已通过');
+  await page.goto('/tasks');
+  const row = page.locator('.el-table__row').filter({ hasText: 'E2E 计划任务' });
+  await expect(row).toContainText('1/1');
+  await row.getByRole('button', { name: '详情' }).click();
+  const drawer = page.getByRole('dialog', { name: '任务详情' });
+  await drawer.locator('label.el-checkbox').filter({ hasText: 'E2E 检查二' }).click();
+  await expect(drawer.getByText('2 / 2')).toBeVisible();
+  await drawer.getByRole('button', { name: '完成任务' }).click();
+  await expect(drawer.getByText('已完成', { exact: true })).toBeVisible();
+  const completedTask = await data(await adminApi.get(`/api/v2/work-items?projectId=${projectId}`));
+  expect(completedTask.items.find((item: { name: string }) => item.name === 'E2E 计划任务')).toEqual(
+    expect.objectContaining({ status: 'DONE', progress: 100, sourceType: 'SOP' }),
+  );
 });
 
 test('G — Message analysis and human confirmation create real idempotent actions', async ({ page }) => {
@@ -299,6 +352,11 @@ test('G — Message analysis and human confirmation create real idempotent actio
   await dialog.locator('textarea').fill(content);
   await dialog.getByRole('button', { name: '录入消息' }).click();
   const card = page.locator('article.panel').filter({ hasText: content });
+  const aiStatus = await data(await adminApi.get('/api/v2/messages/ai-status'));
+  if (!aiStatus.configured) {
+    await expect(card.getByRole('button', { name: 'AI 结构化分析' })).toBeDisabled();
+    return;
+  }
   await card.getByRole('button', { name: 'AI 结构化分析' }).click();
   await expect(card.getByText('CREATE_TASK', { exact: true })).toBeVisible();
   while (await card.getByRole('button', { name: '确认', exact: true }).count()) {
@@ -325,9 +383,9 @@ test('G — Message analysis and human confirmation create real idempotent actio
     decision: 'CONFIRM',
   }));
   await write(adminApi, csrf, 'post', `/api/v2/messages/${message.id}/confirm`, { decisions });
-  const tasks = await data(await adminApi.get(`/api/v2/tasks?projectId=${projectId}&search=跟进消息事项`));
+  const tasks = await data(await adminApi.get(`/api/v2/work-items?projectId=${projectId}&search=跟进消息事项`));
   const issues = await data(await adminApi.get(`/api/v2/issues?projectId=${projectId}&search=消息中识别的问题`));
-  expect(tasks.items.filter((item: { sourceId: string }) => item.sourceId === message.id)).toHaveLength(1);
+  expect(tasks.items.filter((item: { name: string }) => item.name === '跟进消息事项')).toHaveLength(1);
   expect(issues.items.filter((item: { sourceId: string }) => item.sourceId === message.id)).toHaveLength(1);
 });
 
@@ -344,7 +402,7 @@ test('security — member project enumeration is denied and Viewer has no create
   await expect(page.getByText('项目加载失败')).toBeVisible();
   expect(
     (
-      await memberApi.get(`/api/v2/tasks?projectId=${projectBId}`, {
+      await memberApi.get(`/api/v2/work-items?projectId=${projectBId}`, {
         headers: { 'x-csrf-token': memberCsrf },
       })
     ).status(),
@@ -355,9 +413,9 @@ test('security — member project enumeration is denied and Viewer has no create
   await expect(page.getByRole('button', { name: '创建任务' })).toHaveCount(0);
   expect(
     (
-      await viewerApi.post('/api/v2/tasks', {
+      await viewerApi.post(`/api/v2/projects/${projectId}/work-items`, {
         headers: { 'x-csrf-token': viewerCsrf },
-        data: { projectId, title: 'Viewer forbidden' },
+        data: { name: 'Viewer forbidden' },
       })
     ).status(),
   ).toBe(403);

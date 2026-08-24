@@ -16,19 +16,19 @@ const user: RequestUser = {
 const task = {
   id: 'task-id',
   projectId: 'project-id',
-  title: '同步任务',
+  name: '同步任务',
   description: '任务说明',
   priority: 'HIGH',
-  dueDate: new Date('2026-09-01'),
+  plannedEndDate: new Date('2026-09-01'),
   zentaoSync: null,
 };
 
 function fixture(createTask: ReturnType<typeof vi.fn>) {
   const update = vi
     .fn()
-    .mockImplementation(({ data }) => Promise.resolve({ taskId: task.id, ...data }));
+    .mockImplementation(({ data }) => Promise.resolve({ workItemId: task.id, ...data }));
   const prisma = {
-    task: { findUnique: vi.fn().mockResolvedValue(task) },
+    projectWorkItem: { findUnique: vi.fn().mockResolvedValue(task) },
     zentaoTaskSync: { upsert: vi.fn().mockResolvedValue({}), update },
   } as unknown as PrismaService;
   const scope = { assert: vi.fn().mockResolvedValue(undefined) } as unknown as ProjectScopeService;
@@ -55,7 +55,7 @@ describe('ZentaoService', () => {
     const { service, update } = fixture(vi.fn().mockRejectedValue(new Error('gateway timeout')));
     await expect(service.syncTask(user, task.id)).rejects.toThrow('gateway timeout');
     expect(update).toHaveBeenLastCalledWith({
-      where: { taskId: task.id },
+      where: { workItemId: task.id },
       data: { syncStatus: 'FAILED', lastError: 'gateway timeout' },
     });
   });

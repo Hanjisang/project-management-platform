@@ -105,6 +105,14 @@ export class ProjectsService {
         code: 'MANAGER_MUST_BE_MEMBER',
         message: '新负责人必须先加入项目成员',
       });
+    if (
+      dto.approverUserId &&
+      !existing.members.some((member) => member.userId === dto.approverUserId)
+    )
+      throw new BadRequestException({
+        code: 'APPROVER_MUST_BE_MEMBER',
+        message: '审批负责人必须先加入项目成员',
+      });
     return this.withEffectiveHealth(
       await this.repository.update(id, {
         name: dto.name,
@@ -114,6 +122,7 @@ export class ProjectsService {
         plannedGoLiveDate: dto.plannedGoLiveDate,
         healthOverride: dto.healthOverride,
         manager: dto.managerUserId ? { connect: { id: dto.managerUserId } } : undefined,
+        approver: dto.approverUserId ? { connect: { id: dto.approverUserId } } : undefined,
       }),
     );
   }
@@ -124,6 +133,16 @@ export class ProjectsService {
       throw new ConflictException({
         code: 'PROJECT_PLAN_REQUIRED',
         message: '启动项目前必须生成实施计划',
+      });
+    if (!project.approverUserId)
+      throw new ConflictException({
+        code: 'PROJECT_APPROVER_REQUIRED',
+        message: '启动项目前必须配置审批负责人',
+      });
+    if (!(await this.repository.ensureBaseline(id, user.id)))
+      throw new ConflictException({
+        code: 'PROJECT_BASELINE_REQUIRED',
+        message: '启动项目前必须设置合法计划日期并建立基线',
       });
     return this.repository.updateStatus(id, 'ACTIVE', { actualStartDate: new Date() });
   }
@@ -191,10 +210,10 @@ export class ProjectsService {
   async recomputeHealth(projectId: string): Promise<void> {
     const prisma = this.repository.prismaClient();
     const [overdueTaskCount, criticalIssueCount, highIssueCount, risk] = await Promise.all([
-      prisma.task.count({
+      prisma.projectWorkItem.count({
         where: {
           projectId,
-          dueDate: { lt: businessToday() },
+          plannedEndDate: { lt: businessToday() },
           status: { notIn: ['DONE', 'CANCELLED'] },
         },
       }),

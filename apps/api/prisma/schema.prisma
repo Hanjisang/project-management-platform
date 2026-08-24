@@ -67,6 +67,107 @@ enum SourceType {
   ZENTAO
 }
 
+enum WorkItemSourceType {
+  SOP
+  MANUAL
+  CHANGE
+}
+
+enum DeliverableReviewMode {
+  AI_WITH_HUMAN_OVERRIDE
+  AI_THEN_HUMAN_REQUIRED
+  HUMAN_ONLY
+}
+
+enum DocumentReviewType {
+  AI
+  HUMAN
+}
+
+enum DocumentVersionReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  FAILED
+}
+
+enum ReviewFindingSeverity {
+  INFO
+  WARNING
+  ERROR
+}
+
+enum AiReviewJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum ProjectChangeStatus {
+  DRAFT
+  ANALYZING
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  APPLYING
+  APPLIED
+  CANCELLED
+  FAILED
+}
+
+enum ProjectChangeType {
+  SCHEDULE
+  SCOPE
+  REQUIREMENT
+  DELIVERABLE
+  ACCEPTANCE
+  TECHNICAL
+  RESOURCE
+  MIXED
+}
+
+enum ProjectChangeSource {
+  CUSTOMER
+  INTERNAL_PRODUCT
+  R_AND_D
+  THIRD_PARTY
+  ENVIRONMENT
+  POLICY
+  OTHER
+}
+
+enum ProjectChangeOperationType {
+  PROJECT_COMPLETION_DATE_CHANGE
+  ADD_STAGE
+  UPDATE_STAGE
+  CANCEL_STAGE
+  ADD_WORK_ITEM
+  UPDATE_WORK_ITEM
+  CANCEL_WORK_ITEM
+  ADD_CHECKLIST
+  UPDATE_CHECKLIST
+  CANCEL_CHECKLIST
+  ADD_DELIVERABLE
+  UPDATE_DELIVERABLE
+  CANCEL_DELIVERABLE
+  DELIVERABLE_NEEDS_REVISION
+  CHANGE_OWNER
+  CHANGE_ACCEPTANCE_CRITERIA
+}
+
+enum NotificationType {
+  PLAN_ADJUSTED
+  CHANGE_APPROVAL_REQUIRED
+  CHANGE_APPROVED
+  CHANGE_REJECTED
+  CHANGE_APPLIED
+  DELIVERABLE_AI_REVIEW_COMPLETED
+  DELIVERABLE_HUMAN_REVIEW_REQUIRED
+  DELIVERABLE_REJECTED
+  WORK_ITEM_OVERDUE
+}
+
 enum IssueType {
   ISSUE
   RISK
@@ -161,38 +262,45 @@ enum SyncStatus {
 }
 
 model User {
-  id                  String             @id @default(cuid()) @db.VarChar(30)
-  username            String             @unique @db.VarChar(80)
-  passwordHash        String             @map("password_hash") @db.VarChar(255)
-  displayName         String             @map("display_name") @db.VarChar(120)
-  email               String?            @db.VarChar(190)
-  status              UserStatus         @default(ACTIVE)
-  failedLoginAttempts Int                @default(0) @map("failed_login_attempts")
-  lockedUntil         DateTime?          @map("locked_until")
-  lastLoginAt         DateTime?          @map("last_login_at")
-  createdAt           DateTime           @default(now()) @map("created_at")
-  updatedAt           DateTime           @updatedAt @map("updated_at")
-  deletedAt           DateTime?          @map("deleted_at")
-  roles               UserRole[]
-  refreshTokens       RefreshToken[]
-  managedProjects     Project[]          @relation("ProjectManager")
-  memberships         ProjectMember[]
-  ownedPlanTasks      ProjectPlanTask[]  @relation("PlanTaskOwner")
-  ownedTasks          Task[]             @relation("TaskOwner")
-  createdTasks        Task[]             @relation("TaskCreator")
-  ownedIssues         Issue[]            @relation("IssueOwner")
-  createdIssues       Issue[]            @relation("IssueCreator")
-  createdDocuments    Document[]         @relation("DocumentCreator")
-  uploadedVersions    DocumentVersion[]  @relation("DocumentUploader")
-  reviews             DocumentReview[]   @relation("DocumentReviewer")
-  createdMessages     Message[]          @relation("MessageCreator")
-  confirmedActions    PendingAction[]    @relation("ActionConfirmer")
-  dailyReports        DailyReport[]      @relation("DailyReporter")
-  weeklyReports       WeeklyReport[]     @relation("WeeklyCreator")
-  authoredArticles    KnowledgeArticle[] @relation("KnowledgeAuthor")
-  reviewedArticles    KnowledgeArticle[] @relation("KnowledgeReviewer")
-  auditLogs           AuditLog[]
-  notes               ProjectNote[]      @relation("ProjectNoteCreator")
+  id                   String                   @id @default(cuid()) @db.VarChar(30)
+  username             String                   @unique @db.VarChar(80)
+  passwordHash         String                   @map("password_hash") @db.VarChar(255)
+  displayName          String                   @map("display_name") @db.VarChar(120)
+  email                String?                  @db.VarChar(190)
+  status               UserStatus               @default(ACTIVE)
+  failedLoginAttempts  Int                      @default(0) @map("failed_login_attempts")
+  lockedUntil          DateTime?                @map("locked_until")
+  lastLoginAt          DateTime?                @map("last_login_at")
+  createdAt            DateTime                 @default(now()) @map("created_at")
+  updatedAt            DateTime                 @updatedAt @map("updated_at")
+  deletedAt            DateTime?                @map("deleted_at")
+  roles                UserRole[]
+  refreshTokens        RefreshToken[]
+  managedProjects      Project[]                @relation("ProjectManager")
+  approvedProjects     Project[]                @relation("ProjectApprover")
+  memberships          ProjectMember[]
+  ownedWorkItems       ProjectWorkItem[]        @relation("WorkItemOwner")
+  createdWorkItems     ProjectWorkItem[]        @relation("WorkItemCreator")
+  ownedIssues          Issue[]                  @relation("IssueOwner")
+  createdIssues        Issue[]                  @relation("IssueCreator")
+  createdDocuments     Document[]               @relation("DocumentCreator")
+  uploadedVersions     DocumentVersion[]        @relation("DocumentUploader")
+  uploadedSopTemplates SopDeliverableTemplate[] @relation("SopTemplateUploader")
+  reviews              DocumentVersionReview[]  @relation("DocumentVersionReviewer")
+  createdMessages      Message[]                @relation("MessageCreator")
+  confirmedActions     PendingAction[]          @relation("ActionConfirmer")
+  dailyReports         DailyReport[]            @relation("DailyReporter")
+  weeklyReports        WeeklyReport[]           @relation("WeeklyCreator")
+  authoredArticles     KnowledgeArticle[]       @relation("KnowledgeAuthor")
+  reviewedArticles     KnowledgeArticle[]       @relation("KnowledgeReviewer")
+  auditLogs            AuditLog[]
+  notes                ProjectNote[]            @relation("ProjectNoteCreator")
+  requestedChanges     ProjectChangeRequest[]   @relation("ProjectChangeRequester")
+  approvedChanges      ProjectChangeRequest[]   @relation("ProjectChangeApprover")
+  createdBaselines     ProjectBaseline[]        @relation("ProjectBaselineCreator")
+  adjustments          ProjectAdjustmentLog[]   @relation("ProjectAdjustmentOperator")
+  notifications        Notification[]
+  completedChecklists  ProjectChecklistItem[]   @relation("ChecklistCompleter")
 
   @@index([status, deletedAt])
   @@map("users")
@@ -259,27 +367,29 @@ model RefreshToken {
 }
 
 model Project {
-  id                String             @id @default(cuid()) @db.VarChar(30)
-  code              String             @unique @db.VarChar(50)
-  name              String             @db.VarChar(200)
-  customerName      String             @map("customer_name") @db.VarChar(200)
-  managerUserId     String             @map("manager_user_id") @db.VarChar(30)
-  status            ProjectStatus      @default(NOT_STARTED)
-  health            ProjectHealth      @default(NORMAL)
-  healthOverride    ProjectHealth?     @map("health_override")
-  plannedStartDate  DateTime?          @map("planned_start_date") @db.Date
-  plannedGoLiveDate DateTime?          @map("planned_go_live_date") @db.Date
-  actualStartDate   DateTime?          @map("actual_start_date")
-  actualGoLiveDate  DateTime?          @map("actual_go_live_date")
-  progress          Int                @default(0) @db.UnsignedTinyInt
-  description       String?            @db.Text
-  createdAt         DateTime           @default(now()) @map("created_at")
-  updatedAt         DateTime           @updatedAt @map("updated_at")
-  deletedAt         DateTime?          @map("deleted_at")
-  manager           User               @relation("ProjectManager", fields: [managerUserId], references: [id], onDelete: Restrict)
+  id                String                 @id @default(cuid()) @db.VarChar(30)
+  code              String                 @unique @db.VarChar(50)
+  name              String                 @db.VarChar(200)
+  customerName      String                 @map("customer_name") @db.VarChar(200)
+  managerUserId     String                 @map("manager_user_id") @db.VarChar(30)
+  approverUserId    String?                @map("approver_user_id") @db.VarChar(30)
+  status            ProjectStatus          @default(NOT_STARTED)
+  health            ProjectHealth          @default(NORMAL)
+  healthOverride    ProjectHealth?         @map("health_override")
+  plannedStartDate  DateTime?              @map("planned_start_date") @db.Date
+  plannedGoLiveDate DateTime?              @map("planned_go_live_date") @db.Date
+  actualStartDate   DateTime?              @map("actual_start_date")
+  actualGoLiveDate  DateTime?              @map("actual_go_live_date")
+  progress          Int                    @default(0) @db.UnsignedTinyInt
+  description       String?                @db.Text
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+  deletedAt         DateTime?              @map("deleted_at")
+  manager           User                   @relation("ProjectManager", fields: [managerUserId], references: [id], onDelete: Restrict)
+  approver          User?                  @relation("ProjectApprover", fields: [approverUserId], references: [id], onDelete: Restrict)
   members           ProjectMember[]
   plans             ProjectPlan[]
-  tasks             Task[]
+  workItems         ProjectWorkItem[]
   issues            Issue[]
   documents         Document[]
   messages          Message[]
@@ -287,8 +397,13 @@ model Project {
   weeklyReports     WeeklyReport[]
   knowledgeArticles KnowledgeArticle[]
   notes             ProjectNote[]
+  changeRequests    ProjectChangeRequest[]
+  baselines         ProjectBaseline[]
+  adjustmentLogs    ProjectAdjustmentLog[]
+  notifications     Notification[]
 
   @@index([managerUserId])
+  @@index([approverUserId])
   @@index([status, deletedAt])
   @@index([health, plannedGoLiveDate])
   @@map("projects")
@@ -340,17 +455,17 @@ model SopVersion {
 }
 
 model SopStage {
-  id                  String             @id @default(cuid()) @db.VarChar(30)
-  stableKey           String             @default(cuid()) @map("stable_key") @db.VarChar(30)
-  sopVersionId        String             @map("sop_version_id") @db.VarChar(30)
-  name                String             @db.VarChar(200)
-  description         String?            @db.Text
-  sortOrder           Int                @map("sort_order")
-  defaultDurationDays Int                @default(1) @map("default_duration_days")
-  weight              Int                @default(0) @db.UnsignedTinyInt
-  version             SopVersion         @relation(fields: [sopVersionId], references: [id], onDelete: Cascade)
+  id                  String         @id @default(cuid()) @db.VarChar(30)
+  stableKey           String         @default(cuid()) @map("stable_key") @db.VarChar(30)
+  sopVersionId        String         @map("sop_version_id") @db.VarChar(30)
+  name                String         @db.VarChar(200)
+  description         String?        @db.Text
+  sortOrder           Int            @map("sort_order")
+  defaultDurationDays Int            @default(1) @map("default_duration_days")
+  weight              Int            @default(0) @db.UnsignedTinyInt
+  version             SopVersion     @relation(fields: [sopVersionId], references: [id], onDelete: Cascade)
   tasks               SopTask[]
-  planStages          ProjectPlanStage[] @relation("PlanStageSource")
+  projectStages       ProjectStage[] @relation("PlanStageSource")
 
   @@unique([sopVersionId, sortOrder])
   @@unique([sopVersionId, stableKey])
@@ -368,17 +483,79 @@ model SopTask {
   defaultDurationDays Int                @default(1) @map("default_duration_days")
   weight              Int                @default(0) @db.UnsignedTinyInt
   required            Boolean            @default(true)
-  deliverableRequired Boolean            @default(false) @map("deliverable_required")
-  deliverableName     String?            @map("deliverable_name") @db.VarChar(200)
-  deliverableTemplate String?            @map("deliverable_template") @db.VarChar(255)
   stage               SopStage           @relation(fields: [stageId], references: [id], onDelete: Cascade)
   checklistItems      SopChecklistItem[]
-  planTasks           ProjectPlanTask[]  @relation("PlanTaskSource")
+  deliverables        SopDeliverable[]
+  projectWorkItems    ProjectWorkItem[]  @relation("WorkItemSource")
 
   @@unique([stageId, sortOrder])
   @@unique([stageId, stableKey])
   @@index([stageId])
   @@map("sop_tasks")
+}
+
+model SopDeliverable {
+  id                     String                          @id @default(cuid()) @db.VarChar(30)
+  sopTaskId              String                          @map("sop_task_id") @db.VarChar(30)
+  stableKey              String                          @default(cuid()) @map("stable_key") @db.VarChar(30)
+  name                   String                          @db.VarChar(200)
+  description            String?                         @db.Text
+  required               Boolean                         @default(true)
+  sortOrder              Int                             @map("sort_order")
+  reviewMode             DeliverableReviewMode           @default(HUMAN_ONLY) @map("review_mode")
+  aiReviewEnabled        Boolean                         @default(false) @map("ai_review_enabled")
+  aiAutoApproveThreshold Int?                            @map("ai_auto_approve_threshold") @db.UnsignedTinyInt
+  aiReviewInstruction    String?                         @map("ai_review_instruction") @db.Text
+  createdAt              DateTime                        @default(now()) @map("created_at")
+  updatedAt              DateTime                        @updatedAt @map("updated_at")
+  task                   SopTask                         @relation(fields: [sopTaskId], references: [id], onDelete: Cascade)
+  templates              SopDeliverableTemplate[]
+  reviewCriteria         SopDeliverableReviewCriterion[]
+  planDeliverables       ProjectDeliverable[]            @relation("ProjectDeliverableSource")
+
+  @@unique([sopTaskId, stableKey])
+  @@unique([sopTaskId, sortOrder])
+  @@index([sopTaskId])
+  @@map("sop_deliverables")
+}
+
+model SopDeliverableReviewCriterion {
+  id              String                              @id @default(cuid()) @db.VarChar(30)
+  deliverableId   String                              @map("deliverable_id") @db.VarChar(30)
+  stableKey       String                              @default(cuid()) @map("stable_key") @db.VarChar(30)
+  name            String                              @db.VarChar(200)
+  description     String?                             @db.Text
+  required        Boolean                             @default(true)
+  weight          Int                                 @default(0) @db.UnsignedTinyInt
+  sortOrder       Int                                 @map("sort_order")
+  createdAt       DateTime                            @default(now()) @map("created_at")
+  updatedAt       DateTime                            @updatedAt @map("updated_at")
+  deliverable     SopDeliverable                      @relation(fields: [deliverableId], references: [id], onDelete: Cascade)
+  projectCriteria ProjectDeliverableReviewCriterion[] @relation("ProjectCriterionSource")
+
+  @@unique([deliverableId, stableKey])
+  @@unique([deliverableId, sortOrder])
+  @@index([deliverableId])
+  @@map("sop_deliverable_review_criteria")
+}
+
+model SopDeliverableTemplate {
+  id               String                       @id @default(cuid()) @db.VarChar(30)
+  deliverableId    String                       @map("deliverable_id") @db.VarChar(30)
+  fileName         String                       @map("file_name") @db.VarChar(255)
+  objectKey        String                       @unique @map("object_key") @db.VarChar(500)
+  mimeType         String                       @map("mime_type") @db.VarChar(150)
+  size             BigInt                       @db.UnsignedBigInt
+  checksum         String                       @db.VarChar(64)
+  uploadedById     String                       @map("uploaded_by_id") @db.VarChar(30)
+  createdAt        DateTime                     @default(now()) @map("created_at")
+  deliverable      SopDeliverable               @relation(fields: [deliverableId], references: [id], onDelete: Cascade)
+  uploader         User                         @relation("SopTemplateUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  projectTemplates ProjectDeliverableTemplate[] @relation("ProjectTemplateSource")
+
+  @@index([deliverableId, createdAt])
+  @@index([uploadedById])
+  @@map("sop_deliverable_templates")
 }
 
 model SopChecklistItem {
@@ -397,131 +574,192 @@ model SopChecklistItem {
 }
 
 model ProjectPlan {
-  id                 String             @id @default(cuid()) @db.VarChar(30)
-  projectId          String             @map("project_id") @db.VarChar(30)
-  sourceSopVersionId String             @map("source_sop_version_id") @db.VarChar(30)
-  name               String             @db.VarChar(200)
-  progress           Int                @default(0) @db.UnsignedTinyInt
-  generatedAt        DateTime           @default(now()) @map("generated_at")
-  syncedAt           DateTime?          @map("synced_at")
-  project            Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  sourceVersion      SopVersion         @relation(fields: [sourceSopVersionId], references: [id], onDelete: Restrict)
-  stages             ProjectPlanStage[]
+  id                 String         @id @default(cuid()) @db.VarChar(30)
+  projectId          String         @map("project_id") @db.VarChar(30)
+  sourceSopVersionId String?        @map("source_sop_version_id") @db.VarChar(30)
+  name               String         @db.VarChar(200)
+  progress           Int            @default(0) @db.UnsignedTinyInt
+  generatedAt        DateTime       @default(now()) @map("generated_at")
+  syncedAt           DateTime?      @map("synced_at")
+  project            Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceVersion      SopVersion?    @relation(fields: [sourceSopVersionId], references: [id], onDelete: Restrict)
+  stages             ProjectStage[]
 
   @@unique([projectId])
   @@index([sourceSopVersionId])
   @@map("project_plans")
 }
 
-model ProjectPlanStage {
-  id               String            @id @default(cuid()) @db.VarChar(30)
-  planId           String            @map("plan_id") @db.VarChar(30)
-  sourceStageId    String?           @map("source_stage_id") @db.VarChar(30)
-  sourceStageKey   String?           @map("source_stage_key") @db.VarChar(30)
-  name             String            @db.VarChar(200)
-  description      String?           @db.Text
-  sortOrder        Int               @map("sort_order")
-  weight           Int               @default(0) @db.UnsignedTinyInt
-  progress         Int               @default(0) @db.UnsignedTinyInt
-  plannedStartDate DateTime?         @map("planned_start_date") @db.Date
-  plannedEndDate   DateTime?         @map("planned_end_date") @db.Date
-  actualStartDate  DateTime?         @map("actual_start_date")
-  actualEndDate    DateTime?         @map("actual_end_date")
-  isCustom         Boolean           @default(false) @map("is_custom")
-  plan             ProjectPlan       @relation(fields: [planId], references: [id], onDelete: Cascade)
-  sourceStage      SopStage?         @relation("PlanStageSource", fields: [sourceStageId], references: [id], onDelete: SetNull)
-  tasks            ProjectPlanTask[]
+model ProjectStage {
+  id               String                 @id @default(cuid()) @db.VarChar(30)
+  planId           String                 @map("plan_id") @db.VarChar(30)
+  sourceStageId    String?                @map("source_stage_id") @db.VarChar(30)
+  sourceStageKey   String?                @map("source_stage_key") @db.VarChar(30)
+  name             String                 @db.VarChar(200)
+  description      String?                @db.Text
+  sortOrder        Int                    @map("sort_order")
+  weight           Int                    @default(0) @db.UnsignedTinyInt
+  progress         Int                    @default(0) @db.UnsignedTinyInt
+  plannedStartDate DateTime?              @map("planned_start_date") @db.Date
+  plannedEndDate   DateTime?              @map("planned_end_date") @db.Date
+  actualStartDate  DateTime?              @map("actual_start_date")
+  actualEndDate    DateTime?              @map("actual_end_date")
+  isCustom         Boolean                @default(false) @map("is_custom")
+  plan             ProjectPlan            @relation(fields: [planId], references: [id], onDelete: Cascade)
+  sourceStage      SopStage?              @relation("PlanStageSource", fields: [sourceStageId], references: [id], onDelete: SetNull)
+  workItems        ProjectWorkItem[]
+  baselineStages   ProjectBaselineStage[]
 
   @@unique([planId, sortOrder])
   @@index([planId])
   @@index([sourceStageId])
   @@index([sourceStageKey])
-  @@map("project_plan_stages")
+  @@map("project_stages")
 }
 
-model ProjectPlanTask {
-  id                  String                 @id @default(cuid()) @db.VarChar(30)
-  planStageId         String                 @map("plan_stage_id") @db.VarChar(30)
-  sourceTaskId        String?                @map("source_task_id") @db.VarChar(30)
-  sourceTaskKey       String?                @map("source_task_key") @db.VarChar(30)
-  name                String                 @db.VarChar(200)
-  description         String?                @db.Text
-  sortOrder           Int                    @map("sort_order")
-  weight              Int                    @default(0) @db.UnsignedTinyInt
-  required            Boolean                @default(true)
-  deliverableRequired Boolean                @default(false) @map("deliverable_required")
-  deliverableName     String?                @map("deliverable_name") @db.VarChar(200)
-  ownerUserId         String?                @map("owner_user_id") @db.VarChar(30)
-  plannedStartDate    DateTime?              @map("planned_start_date") @db.Date
-  plannedEndDate      DateTime?              @map("planned_end_date") @db.Date
-  actualStartDate     DateTime?              @map("actual_start_date")
-  actualEndDate       DateTime?              @map("actual_end_date")
-  progress            Int                    @default(0) @db.UnsignedTinyInt
-  isCustom            Boolean                @default(false) @map("is_custom")
-  stage               ProjectPlanStage       @relation(fields: [planStageId], references: [id], onDelete: Cascade)
-  sourceTask          SopTask?               @relation("PlanTaskSource", fields: [sourceTaskId], references: [id], onDelete: SetNull)
-  owner               User?                  @relation("PlanTaskOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  checklistItems      ProjectChecklistItem[]
-  tasks               Task[]
-  documents           Document[]
+model ProjectWorkItem {
+  id                         String                    @id @default(cuid()) @db.VarChar(30)
+  projectId                  String                    @map("project_id") @db.VarChar(30)
+  planStageId                String                    @map("plan_stage_id") @db.VarChar(30)
+  sourceSopTaskId            String?                   @map("source_sop_task_id") @db.VarChar(30)
+  sourceSopTaskKey           String?                   @map("source_sop_task_key") @db.VarChar(30)
+  parentWorkItemId           String?                   @map("parent_work_item_id") @db.VarChar(30)
+  name                       String                    @db.VarChar(240)
+  description                String?                   @db.Text
+  ownerUserId                String?                   @map("owner_user_id") @db.VarChar(30)
+  status                     TaskStatus                @default(TODO)
+  priority                   TaskPriority              @default(MEDIUM)
+  plannedStartDate           DateTime?                 @map("planned_start_date") @db.Date
+  plannedEndDate             DateTime?                 @map("planned_end_date") @db.Date
+  actualStartDate            DateTime?                 @map("actual_start_date")
+  actualEndDate              DateTime?                 @map("actual_end_date")
+  progress                   Int                       @default(0) @db.UnsignedTinyInt
+  required                   Boolean                   @default(true)
+  sourceType                 WorkItemSourceType        @default(MANUAL) @map("source_type")
+  sortOrder                  Int                       @map("sort_order")
+  weight                     Int                       @default(0) @db.UnsignedTinyInt
+  isCustom                   Boolean                   @default(false) @map("is_custom")
+  cancelledByChangeRequestId String?                   @map("cancelled_by_change_request_id") @db.VarChar(30)
+  createdById                String                    @map("created_by_id") @db.VarChar(30)
+  createdAt                  DateTime                  @default(now()) @map("created_at")
+  updatedAt                  DateTime                  @updatedAt @map("updated_at")
+  project                    Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stage                      ProjectStage              @relation(fields: [planStageId], references: [id], onDelete: Cascade)
+  sourceSopTask              SopTask?                  @relation("WorkItemSource", fields: [sourceSopTaskId], references: [id], onDelete: SetNull)
+  parent                     ProjectWorkItem?          @relation("WorkItemHierarchy", fields: [parentWorkItemId], references: [id], onDelete: SetNull)
+  children                   ProjectWorkItem[]         @relation("WorkItemHierarchy")
+  owner                      User?                     @relation("WorkItemOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  creator                    User                      @relation("WorkItemCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  cancelledByChangeRequest   ProjectChangeRequest?     @relation("CancelledWorkItems", fields: [cancelledByChangeRequestId], references: [id], onDelete: SetNull)
+  checklistItems             ProjectChecklistItem[]
+  deliverables               ProjectDeliverable[]
+  documents                  Document[]
+  zentaoSync                 ZentaoTaskSync?
+  baselineWorkItems          ProjectBaselineWorkItem[]
 
   @@unique([planStageId, sortOrder])
+  @@index([projectId, status])
+  @@index([projectId, plannedEndDate])
   @@index([planStageId])
-  @@index([sourceTaskId])
-  @@index([sourceTaskKey])
-  @@index([ownerUserId])
-  @@map("project_plan_tasks")
+  @@index([sourceSopTaskId])
+  @@index([sourceSopTaskKey])
+  @@index([parentWorkItemId])
+  @@index([ownerUserId, status])
+  @@index([cancelledByChangeRequestId])
+  @@map("project_work_items")
+}
+
+model ProjectDeliverable {
+  id                     String                              @id @default(cuid()) @db.VarChar(30)
+  workItemId             String                              @map("work_item_id") @db.VarChar(30)
+  sourceDeliverableId    String?                             @map("source_deliverable_id") @db.VarChar(30)
+  sourceDeliverableKey   String?                             @map("source_deliverable_key") @db.VarChar(30)
+  name                   String                              @db.VarChar(200)
+  description            String?                             @db.Text
+  required               Boolean                             @default(true)
+  sortOrder              Int                                 @map("sort_order")
+  reviewMode             DeliverableReviewMode               @default(HUMAN_ONLY) @map("review_mode")
+  aiAutoApproveThreshold Int?                                @map("ai_auto_approve_threshold") @db.UnsignedTinyInt
+  aiReviewInstruction    String?                             @map("ai_review_instruction") @db.Text
+  needsRevision          Boolean                             @default(false) @map("needs_revision")
+  revisionReason         String?                             @map("revision_reason") @db.Text
+  isCustom               Boolean                             @default(false) @map("is_custom")
+  createdAt              DateTime                            @default(now()) @map("created_at")
+  updatedAt              DateTime                            @updatedAt @map("updated_at")
+  workItem               ProjectWorkItem                     @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  sourceDeliverable      SopDeliverable?                     @relation("ProjectDeliverableSource", fields: [sourceDeliverableId], references: [id], onDelete: SetNull)
+  templates              ProjectDeliverableTemplate[]
+  documents              Document[]
+  reviewCriteria         ProjectDeliverableReviewCriterion[]
+  baselineDeliverables   ProjectBaselineDeliverable[]
+
+  @@unique([workItemId, sourceDeliverableKey])
+  @@unique([workItemId, sortOrder])
+  @@index([workItemId])
+  @@index([sourceDeliverableId])
+  @@map("project_deliverables")
+}
+
+model ProjectDeliverableReviewCriterion {
+  id                   String                          @id @default(cuid()) @db.VarChar(30)
+  projectDeliverableId String                          @map("project_deliverable_id") @db.VarChar(30)
+  sourceCriterionId    String?                         @map("source_criterion_id") @db.VarChar(30)
+  sourceCriterionKey   String?                         @map("source_criterion_key") @db.VarChar(30)
+  name                 String                          @db.VarChar(200)
+  description          String?                         @db.Text
+  required             Boolean                         @default(true)
+  weight               Int                             @default(0) @db.UnsignedTinyInt
+  sortOrder            Int                             @map("sort_order")
+  projectDeliverable   ProjectDeliverable              @relation(fields: [projectDeliverableId], references: [id], onDelete: Cascade)
+  sourceCriterion      SopDeliverableReviewCriterion?  @relation("ProjectCriterionSource", fields: [sourceCriterionId], references: [id], onDelete: SetNull)
+  reviewResults        DocumentReviewCriterionResult[]
+
+  @@unique([projectDeliverableId, sourceCriterionKey], map: "project_delivery_criterion_source_key")
+  @@unique([projectDeliverableId, sortOrder], map: "project_delivery_criterion_sort_key")
+  @@index([sourceCriterionId])
+  @@map("project_deliverable_review_criteria")
+}
+
+model ProjectDeliverableTemplate {
+  id                   String                  @id @default(cuid()) @db.VarChar(30)
+  projectDeliverableId String                  @map("project_deliverable_id") @db.VarChar(30)
+  sourceTemplateId     String?                 @map("source_template_id") @db.VarChar(30)
+  fileName             String                  @map("file_name") @db.VarChar(255)
+  objectKey            String                  @map("object_key") @db.VarChar(500)
+  mimeType             String                  @map("mime_type") @db.VarChar(150)
+  size                 BigInt                  @db.UnsignedBigInt
+  checksum             String                  @db.VarChar(64)
+  createdAt            DateTime                @default(now()) @map("created_at")
+  projectDeliverable   ProjectDeliverable      @relation(fields: [projectDeliverableId], references: [id], onDelete: Cascade)
+  sourceTemplate       SopDeliverableTemplate? @relation("ProjectTemplateSource", fields: [sourceTemplateId], references: [id], onDelete: SetNull)
+
+  @@unique([projectDeliverableId, sourceTemplateId], map: "project_delivery_template_source_key")
+  @@index([projectDeliverableId])
+  @@index([sourceTemplateId])
+  @@index([objectKey])
+  @@map("project_deliverable_templates")
 }
 
 model ProjectChecklistItem {
-  id            String          @id @default(cuid()) @db.VarChar(30)
-  planTaskId    String          @map("plan_task_id") @db.VarChar(30)
-  sourceItemId  String?         @map("source_item_id") @db.VarChar(30)
-  sourceItemKey String?         @map("source_item_key") @db.VarChar(30)
-  name          String          @db.VarChar(200)
-  sortOrder     Int             @map("sort_order")
-  required      Boolean         @default(true)
-  completed     Boolean         @default(false)
-  completedAt   DateTime?       @map("completed_at")
-  completedById String?         @map("completed_by_id") @db.VarChar(30)
-  isCustom      Boolean         @default(false) @map("is_custom")
-  task          ProjectPlanTask @relation(fields: [planTaskId], references: [id], onDelete: Cascade)
+  id            String                         @id @default(cuid()) @db.VarChar(30)
+  workItemId    String                         @map("work_item_id") @db.VarChar(30)
+  sourceItemId  String?                        @map("source_item_id") @db.VarChar(30)
+  sourceItemKey String?                        @map("source_item_key") @db.VarChar(30)
+  name          String                         @db.VarChar(200)
+  sortOrder     Int                            @map("sort_order")
+  required      Boolean                        @default(true)
+  completed     Boolean                        @default(false)
+  completedAt   DateTime?                      @map("completed_at")
+  completedById String?                        @map("completed_by_id") @db.VarChar(30)
+  isCustom      Boolean                        @default(false) @map("is_custom")
+  workItem      ProjectWorkItem                @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  completedBy   User?                          @relation("ChecklistCompleter", fields: [completedById], references: [id], onDelete: SetNull)
+  baselineItems ProjectBaselineChecklistItem[]
 
-  @@unique([planTaskId, sortOrder])
-  @@index([planTaskId, completed])
+  @@unique([workItemId, sortOrder])
+  @@index([workItemId, completed])
   @@index([sourceItemKey])
   @@map("project_checklist_items")
-}
-
-model Task {
-  id               String           @id @default(cuid()) @db.VarChar(30)
-  projectId        String           @map("project_id") @db.VarChar(30)
-  planTaskId       String?          @map("plan_task_id") @db.VarChar(30)
-  title            String           @db.VarChar(240)
-  description      String?          @db.Text
-  ownerUserId      String?          @map("owner_user_id") @db.VarChar(30)
-  status           TaskStatus       @default(TODO)
-  priority         TaskPriority     @default(MEDIUM)
-  plannedStartDate DateTime?        @map("planned_start_date") @db.Date
-  dueDate          DateTime?        @map("due_date") @db.Date
-  completedAt      DateTime?        @map("completed_at")
-  progress         Int              @default(0) @db.UnsignedTinyInt
-  sourceType       SourceType       @default(MANUAL) @map("source_type")
-  sourceId         String?          @map("source_id") @db.VarChar(80)
-  createdById      String           @map("created_by_id") @db.VarChar(30)
-  createdAt        DateTime         @default(now()) @map("created_at")
-  updatedAt        DateTime         @updatedAt @map("updated_at")
-  project          Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  planTask         ProjectPlanTask? @relation(fields: [planTaskId], references: [id], onDelete: SetNull)
-  owner            User?            @relation("TaskOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  creator          User             @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  zentaoSync       ZentaoTaskSync?
-
-  @@index([projectId, status])
-  @@index([projectId, dueDate])
-  @@index([ownerUserId, status])
-  @@index([createdAt])
-  @@map("tasks")
 }
 
 model Issue {
@@ -554,63 +792,122 @@ model Issue {
 }
 
 model Document {
-  id                String             @id @default(cuid()) @db.VarChar(30)
-  projectId         String             @map("project_id") @db.VarChar(30)
-  planTaskId        String?            @map("plan_task_id") @db.VarChar(30)
-  name              String             @db.VarChar(240)
-  description       String?            @db.Text
-  required          Boolean            @default(false)
-  status            DocumentStatus     @default(DRAFT)
-  createdById       String             @map("created_by_id") @db.VarChar(30)
-  createdAt         DateTime           @default(now()) @map("created_at")
-  updatedAt         DateTime           @updatedAt @map("updated_at")
-  deletedAt         DateTime?          @map("deleted_at")
-  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  planTask          ProjectPlanTask?   @relation(fields: [planTaskId], references: [id], onDelete: SetNull)
-  creator           User               @relation("DocumentCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  versions          DocumentVersion[]
-  reviews           DocumentReview[]
-  knowledgeArticles KnowledgeArticle[]
+  id                   String              @id @default(cuid()) @db.VarChar(30)
+  projectId            String              @map("project_id") @db.VarChar(30)
+  workItemId           String?             @map("work_item_id") @db.VarChar(30)
+  projectDeliverableId String?             @map("project_deliverable_id") @db.VarChar(30)
+  name                 String              @db.VarChar(240)
+  description          String?             @db.Text
+  required             Boolean             @default(false)
+  status               DocumentStatus      @default(DRAFT)
+  createdById          String              @map("created_by_id") @db.VarChar(30)
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+  deletedAt            DateTime?           @map("deleted_at")
+  project              Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workItem             ProjectWorkItem?    @relation(fields: [workItemId], references: [id], onDelete: SetNull)
+  projectDeliverable   ProjectDeliverable? @relation(fields: [projectDeliverableId], references: [id], onDelete: SetNull)
+  creator              User                @relation("DocumentCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  versions             DocumentVersion[]
+  knowledgeArticles    KnowledgeArticle[]
 
+  @@unique([projectDeliverableId])
   @@index([projectId, status])
-  @@index([planTaskId])
+  @@index([workItemId])
   @@index([deletedAt])
   @@map("documents")
 }
 
 model DocumentVersion {
-  id           String   @id @default(cuid()) @db.VarChar(30)
-  documentId   String   @map("document_id") @db.VarChar(30)
-  version      String   @db.VarChar(40)
-  objectKey    String   @unique @map("object_key") @db.VarChar(500)
-  fileName     String   @map("file_name") @db.VarChar(255)
-  mimeType     String   @map("mime_type") @db.VarChar(150)
-  size         BigInt   @db.UnsignedBigInt
-  checksum     String   @db.VarChar(64)
-  uploadedById String   @map("uploaded_by_id") @db.VarChar(30)
-  createdAt    DateTime @default(now()) @map("created_at")
-  document     Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  uploader     User     @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  id           String                  @id @default(cuid()) @db.VarChar(30)
+  documentId   String                  @map("document_id") @db.VarChar(30)
+  version      String                  @db.VarChar(40)
+  objectKey    String                  @unique @map("object_key") @db.VarChar(500)
+  fileName     String                  @map("file_name") @db.VarChar(255)
+  mimeType     String                  @map("mime_type") @db.VarChar(150)
+  size         BigInt                  @db.UnsignedBigInt
+  checksum     String                  @db.VarChar(64)
+  uploadedById String                  @map("uploaded_by_id") @db.VarChar(30)
+  createdAt    DateTime                @default(now()) @map("created_at")
+  document     Document                @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploader     User                    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  reviews      DocumentVersionReview[]
+  aiReviewJobs AiReviewJob[]
 
   @@unique([documentId, version])
   @@index([documentId, createdAt])
   @@map("document_versions")
 }
 
-model DocumentReview {
-  id         String               @id @default(cuid()) @db.VarChar(30)
-  documentId String               @map("document_id") @db.VarChar(30)
-  reviewerId String               @map("reviewer_id") @db.VarChar(30)
-  status     DocumentReviewStatus @default(PENDING)
-  comment    String?              @db.Text
-  reviewedAt DateTime?            @map("reviewed_at")
-  createdAt  DateTime             @default(now()) @map("created_at")
-  document   Document             @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  reviewer   User                 @relation("DocumentReviewer", fields: [reviewerId], references: [id], onDelete: Restrict)
+model DocumentVersionReview {
+  id                String                          @id @default(cuid()) @db.VarChar(30)
+  documentVersionId String                          @map("document_version_id") @db.VarChar(30)
+  reviewType        DocumentReviewType              @map("review_type")
+  status            DocumentVersionReviewStatus     @default(PENDING)
+  reviewerUserId    String?                         @map("reviewer_user_id") @db.VarChar(30)
+  aiProvider        String?                         @map("ai_provider") @db.VarChar(80)
+  aiModel           String?                         @map("ai_model") @db.VarChar(120)
+  score             Int?                            @db.UnsignedTinyInt
+  summary           String?                         @db.Text
+  decisionReason    String?                         @map("decision_reason") @db.Text
+  createdAt         DateTime                        @default(now()) @map("created_at")
+  reviewedAt        DateTime?                       @map("reviewed_at")
+  documentVersion   DocumentVersion                 @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+  reviewer          User?                           @relation("DocumentVersionReviewer", fields: [reviewerUserId], references: [id], onDelete: SetNull)
+  findings          ReviewFinding[]
+  criterionResults  DocumentReviewCriterionResult[]
 
-  @@unique([documentId, reviewerId])
-  @@index([reviewerId, status])
-  @@map("document_reviews")
+  @@index([documentVersionId, createdAt])
+  @@index([reviewerUserId, status])
+  @@map("document_version_reviews")
+}
+
+model ReviewFinding {
+  id          String                @id @default(cuid()) @db.VarChar(30)
+  reviewId    String                @map("review_id") @db.VarChar(30)
+  criterionId String?               @map("criterion_id") @db.VarChar(30)
+  severity    ReviewFindingSeverity
+  title       String                @db.VarChar(240)
+  description String                @db.Text
+  suggestion  String?               @db.Text
+  sortOrder   Int                   @map("sort_order")
+  review      DocumentVersionReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId, sortOrder])
+  @@index([criterionId])
+  @@map("review_findings")
+}
+
+model DocumentReviewCriterionResult {
+  id          String                            @id @default(cuid()) @db.VarChar(30)
+  reviewId    String                            @map("review_id") @db.VarChar(30)
+  criterionId String                            @map("criterion_id") @db.VarChar(30)
+  passed      Boolean
+  score       Int?                              @db.UnsignedTinyInt
+  explanation String?                           @db.Text
+  review      DocumentVersionReview             @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  criterion   ProjectDeliverableReviewCriterion @relation(fields: [criterionId], references: [id], onDelete: Restrict)
+
+  @@unique([reviewId, criterionId])
+  @@index([criterionId])
+  @@map("document_review_criterion_results")
+}
+
+model AiReviewJob {
+  id                String            @id @default(cuid()) @db.VarChar(30)
+  documentVersionId String            @unique(map: "ai_review_jobs_document_version_id_key") @map("document_version_id") @db.VarChar(30)
+  status            AiReviewJobStatus @default(PENDING)
+  attempts          Int               @default(0)
+  nextRunAt         DateTime          @default(now()) @map("next_run_at")
+  lastError         String?           @map("last_error") @db.Text
+  claimedAt         DateTime?         @map("claimed_at")
+  completedAt       DateTime?         @map("completed_at")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+  documentVersion   DocumentVersion   @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextRunAt])
+  @@map("ai_review_jobs")
 }
 
 model Message {
@@ -769,6 +1066,189 @@ model KnowledgeAttachment {
   @@map("knowledge_attachments")
 }
 
+model ProjectChangeRequest {
+  id                 String                   @id @default(cuid()) @db.VarChar(30)
+  projectId          String                   @map("project_id") @db.VarChar(30)
+  code               String                   @db.VarChar(50)
+  title              String                   @db.VarChar(240)
+  description        String                   @db.Text
+  changeType         ProjectChangeType        @map("change_type")
+  reason             String                   @db.Text
+  source             ProjectChangeSource
+  status             ProjectChangeStatus      @default(DRAFT)
+  requestedByUserId  String                   @map("requested_by_user_id") @db.VarChar(30)
+  approverUserId     String                   @map("approver_user_id") @db.VarChar(30)
+  submittedAt        DateTime?                @map("submitted_at")
+  approvedAt         DateTime?                @map("approved_at")
+  rejectedAt         DateTime?                @map("rejected_at")
+  appliedAt          DateTime?                @map("applied_at")
+  approvalComment    String?                  @map("approval_comment") @db.Text
+  aiImpactSummary    String?                  @map("ai_impact_summary") @db.LongText
+  failureReason      String?                  @map("failure_reason") @db.Text
+  createdAt          DateTime                 @default(now()) @map("created_at")
+  updatedAt          DateTime                 @updatedAt @map("updated_at")
+  project            Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requestedBy        User                     @relation("ProjectChangeRequester", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  approver           User                     @relation("ProjectChangeApprover", fields: [approverUserId], references: [id], onDelete: Restrict)
+  operations         ProjectChangeOperation[]
+  baseline           ProjectBaseline?
+  cancelledWorkItems ProjectWorkItem[]        @relation("CancelledWorkItems")
+
+  @@unique([projectId, code])
+  @@index([projectId, status, createdAt])
+  @@index([approverUserId, status])
+  @@map("project_change_requests")
+}
+
+model ProjectChangeOperation {
+  id              String                     @id @default(cuid()) @db.VarChar(30)
+  changeRequestId String                     @map("change_request_id") @db.VarChar(30)
+  operationType   ProjectChangeOperationType @map("operation_type")
+  entityId        String?                    @map("entity_id") @db.VarChar(30)
+  sortOrder       Int                        @map("sort_order")
+  payload         Json
+  appliedAt       DateTime?                  @map("applied_at")
+  createdAt       DateTime                   @default(now()) @map("created_at")
+  changeRequest   ProjectChangeRequest       @relation(fields: [changeRequestId], references: [id], onDelete: Cascade)
+
+  @@unique([changeRequestId, sortOrder])
+  @@index([changeRequestId, operationType])
+  @@map("project_change_operations")
+}
+
+model ProjectBaseline {
+  id                    String                 @id @default(cuid()) @db.VarChar(30)
+  projectId             String                 @map("project_id") @db.VarChar(30)
+  version               Int
+  plannedStartDate      DateTime               @map("planned_start_date") @db.Date
+  plannedCompletionDate DateTime               @map("planned_completion_date") @db.Date
+  createdByUserId       String                 @map("created_by_user_id") @db.VarChar(30)
+  sourceChangeRequestId String?                @unique @map("source_change_request_id") @db.VarChar(30)
+  createdAt             DateTime               @default(now()) @map("created_at")
+  project               Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  creator               User                   @relation("ProjectBaselineCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  sourceChangeRequest   ProjectChangeRequest?  @relation(fields: [sourceChangeRequestId], references: [id], onDelete: SetNull)
+  stages                ProjectBaselineStage[]
+  adjustmentLogs        ProjectAdjustmentLog[]
+
+  @@unique([projectId, version])
+  @@index([projectId, createdAt])
+  @@map("project_baselines")
+}
+
+model ProjectBaselineStage {
+  id               String                    @id @default(cuid()) @db.VarChar(30)
+  baselineId       String                    @map("baseline_id") @db.VarChar(30)
+  sourceStageId    String?                   @map("source_stage_id") @db.VarChar(30)
+  name             String                    @db.VarChar(200)
+  sortOrder        Int                       @map("sort_order")
+  weight           Int                       @default(0) @db.UnsignedTinyInt
+  plannedStartDate DateTime?                 @map("planned_start_date") @db.Date
+  plannedEndDate   DateTime?                 @map("planned_end_date") @db.Date
+  baseline         ProjectBaseline           @relation(fields: [baselineId], references: [id], onDelete: Cascade)
+  sourceStage      ProjectStage?             @relation(fields: [sourceStageId], references: [id], onDelete: SetNull)
+  workItems        ProjectBaselineWorkItem[]
+
+  @@unique([baselineId, sortOrder])
+  @@index([sourceStageId])
+  @@map("project_baseline_stages")
+}
+
+model ProjectBaselineWorkItem {
+  id               String                         @id @default(cuid()) @db.VarChar(30)
+  baselineStageId  String                         @map("baseline_stage_id") @db.VarChar(30)
+  sourceWorkItemId String?                        @map("source_work_item_id") @db.VarChar(30)
+  name             String                         @db.VarChar(240)
+  required         Boolean                        @default(true)
+  sortOrder        Int                            @map("sort_order")
+  weight           Int                            @default(0) @db.UnsignedTinyInt
+  plannedStartDate DateTime?                      @map("planned_start_date") @db.Date
+  plannedEndDate   DateTime?                      @map("planned_end_date") @db.Date
+  stage            ProjectBaselineStage           @relation(fields: [baselineStageId], references: [id], onDelete: Cascade)
+  sourceWorkItem   ProjectWorkItem?               @relation(fields: [sourceWorkItemId], references: [id], onDelete: SetNull)
+  checklistItems   ProjectBaselineChecklistItem[]
+  deliverables     ProjectBaselineDeliverable[]
+
+  @@unique([baselineStageId, sortOrder])
+  @@index([sourceWorkItemId])
+  @@map("project_baseline_work_items")
+}
+
+model ProjectBaselineChecklistItem {
+  id                    String                  @id @default(cuid()) @db.VarChar(30)
+  baselineWorkItemId    String                  @map("baseline_work_item_id") @db.VarChar(30)
+  sourceChecklistItemId String?                 @map("source_checklist_item_id") @db.VarChar(30)
+  name                  String                  @db.VarChar(200)
+  required              Boolean                 @default(true)
+  sortOrder             Int                     @map("sort_order")
+  workItem              ProjectBaselineWorkItem @relation(fields: [baselineWorkItemId], references: [id], onDelete: Cascade)
+  sourceChecklistItem   ProjectChecklistItem?   @relation(fields: [sourceChecklistItemId], references: [id], onDelete: SetNull)
+
+  @@unique([baselineWorkItemId, sortOrder])
+  @@index([sourceChecklistItemId])
+  @@map("project_baseline_checklist_items")
+}
+
+model ProjectBaselineDeliverable {
+  id                  String                  @id @default(cuid()) @db.VarChar(30)
+  baselineWorkItemId  String                  @map("baseline_work_item_id") @db.VarChar(30)
+  sourceDeliverableId String?                 @map("source_deliverable_id") @db.VarChar(30)
+  name                String                  @db.VarChar(200)
+  description         String?                 @db.Text
+  required            Boolean                 @default(true)
+  sortOrder           Int                     @map("sort_order")
+  reviewMode          DeliverableReviewMode   @map("review_mode")
+  workItem            ProjectBaselineWorkItem @relation(fields: [baselineWorkItemId], references: [id], onDelete: Cascade)
+  sourceDeliverable   ProjectDeliverable?     @relation(fields: [sourceDeliverableId], references: [id], onDelete: SetNull)
+
+  @@unique([baselineWorkItemId, sortOrder])
+  @@index([sourceDeliverableId])
+  @@map("project_baseline_deliverables")
+}
+
+model ProjectAdjustmentLog {
+  id                   String          @id @default(cuid()) @db.VarChar(30)
+  projectId            String          @map("project_id") @db.VarChar(30)
+  operatorUserId       String          @map("operator_user_id") @db.VarChar(30)
+  adjustmentType       String          @map("adjustment_type") @db.VarChar(80)
+  entityType           String          @map("entity_type") @db.VarChar(80)
+  entityId             String          @map("entity_id") @db.VarChar(30)
+  beforeSummary        String          @map("before_summary") @db.Text
+  afterSummary         String          @map("after_summary") @db.Text
+  reason               String          @db.Text
+  baselineId           String          @map("baseline_id") @db.VarChar(30)
+  completionDateBefore DateTime?       @map("completion_date_before") @db.Date
+  completionDateAfter  DateTime?       @map("completion_date_after") @db.Date
+  changeRate           Decimal?        @map("change_rate") @db.Decimal(8, 4)
+  createdAt            DateTime        @default(now()) @map("created_at")
+  project              Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  operator             User            @relation("ProjectAdjustmentOperator", fields: [operatorUserId], references: [id], onDelete: Restrict)
+  baseline             ProjectBaseline @relation(fields: [baselineId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, createdAt])
+  @@index([baselineId])
+  @@map("project_adjustment_logs")
+}
+
+model Notification {
+  id           String           @id @default(cuid()) @db.VarChar(30)
+  userId       String           @map("user_id") @db.VarChar(30)
+  projectId    String?          @map("project_id") @db.VarChar(30)
+  type         NotificationType
+  title        String           @db.VarChar(240)
+  content      String           @db.Text
+  resourceType String           @map("resource_type") @db.VarChar(100)
+  resourceId   String           @map("resource_id") @db.VarChar(30)
+  readAt       DateTime?        @map("read_at")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project      Project?         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@index([projectId, type])
+  @@map("notifications")
+}
+
 model AuditLog {
   id           String   @id @default(cuid()) @db.VarChar(30)
   userId       String?  @map("user_id") @db.VarChar(30)
@@ -790,14 +1270,14 @@ model AuditLog {
 }
 
 model ZentaoTaskSync {
-  id             String     @id @default(cuid()) @db.VarChar(30)
-  taskId         String     @unique @map("task_id") @db.VarChar(30)
-  externalTaskId String?    @map("external_task_id") @db.VarChar(120)
-  idempotencyKey String     @unique @map("idempotency_key") @db.VarChar(120)
-  syncStatus     SyncStatus @default(PENDING) @map("sync_status")
-  lastSyncedAt   DateTime?  @map("last_synced_at")
-  lastError      String?    @map("last_error") @db.Text
-  task           Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  id             String          @id @default(cuid()) @db.VarChar(30)
+  workItemId     String          @unique @map("work_item_id") @db.VarChar(30)
+  externalTaskId String?         @map("external_task_id") @db.VarChar(120)
+  idempotencyKey String          @unique @map("idempotency_key") @db.VarChar(120)
+  syncStatus     SyncStatus      @default(PENDING) @map("sync_status")
+  lastSyncedAt   DateTime?       @map("last_synced_at")
+  lastError      String?         @map("last_error") @db.Text
+  workItem       ProjectWorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
 
   @@index([syncStatus, lastSyncedAt])
   @@map("zentao_task_syncs")

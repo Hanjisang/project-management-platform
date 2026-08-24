@@ -14,7 +14,14 @@ const client = useQueryClient();
 const selectedId = ref('');
 const templateDialog = ref(false);
 const taskDialog = ref(false);
+const deliverableDialog = ref(false);
+const templateUploadDialog = ref(false);
+const criterionDialog = ref(false);
 const selectedStage = ref('');
+const selectedTask = ref('');
+const selectedDeliverable = ref('');
+const editingDeliverable = ref('');
+const templateFile = ref<File>();
 const templateForm = reactive({ code: '', name: '', description: '' });
 function resetTemplateForm(): void {
   Object.assign(templateForm, { code: '', name: '', description: '' });
@@ -24,9 +31,22 @@ const taskForm = reactive({
   description: '',
   defaultDurationDays: 1,
   required: true,
-  deliverableRequired: false,
-  deliverableName: '',
-  deliverableTemplate: '',
+});
+const deliverableForm = reactive({
+  name: '',
+  description: '',
+  required: true,
+  sortOrder: 0,
+  reviewMode: 'HUMAN_ONLY' as 'AI_WITH_HUMAN_OVERRIDE' | 'AI_THEN_HUMAN_REQUIRED' | 'HUMAN_ONLY',
+  aiAutoApproveThreshold: 85,
+  aiReviewInstruction: '',
+});
+const criterionForm = reactive({
+  name: '',
+  description: '',
+  required: true,
+  weight: 100,
+  sortOrder: 0,
 });
 const list = useQuery({ queryKey: ['sop-templates'], queryFn: sopApi.list });
 const detail = useQuery({
@@ -76,19 +96,12 @@ function openTask(stageId: string): void {
     description: '',
     defaultDurationDays: 1,
     required: true,
-    deliverableRequired: false,
-    deliverableName: '',
-    deliverableTemplate: '',
   });
   taskDialog.value = true;
 }
 async function addTask(): Promise<void> {
   try {
-    await sopApi.createTask(selectedStage.value, {
-      ...taskForm,
-      deliverableName: taskForm.deliverableRequired ? taskForm.deliverableName : undefined,
-      deliverableTemplate: taskForm.deliverableTemplate || undefined,
-    });
+    await sopApi.createTask(selectedStage.value, taskForm);
     taskDialog.value = false;
     ElMessage.success('SOP 任务已新增');
     await refresh();
@@ -147,8 +160,6 @@ async function editTask(
     sortOrder: task.sortOrder,
     defaultDurationDays: task.defaultDurationDays,
     required: task.required,
-    deliverableRequired: task.deliverableRequired,
-    deliverableName: task.deliverableName,
   });
   await refresh();
 }
@@ -161,6 +172,85 @@ async function removeChecklist(id: string): Promise<void> {
   await ElMessageBox.confirm('确定删除该检查项？', '删除检查项', { type: 'warning' });
   await sopApi.removeChecklist(id);
   await refresh();
+}
+type SopTask = NonNullable<SopVersion['stages']>[number]['tasks'][number];
+type SopDeliverable = SopTask['deliverables'][number];
+function openDeliverable(taskId: string, deliverable?: SopDeliverable): void {
+  selectedTask.value = taskId;
+  editingDeliverable.value = deliverable?.id ?? '';
+  Object.assign(deliverableForm, {
+    name: deliverable?.name ?? '',
+    description: deliverable?.description ?? '',
+    required: deliverable?.required ?? true,
+    sortOrder: deliverable?.sortOrder ?? 0,
+    reviewMode: deliverable?.reviewMode ?? 'HUMAN_ONLY',
+    aiAutoApproveThreshold: deliverable?.aiAutoApproveThreshold ?? 85,
+    aiReviewInstruction: deliverable?.aiReviewInstruction ?? '',
+  });
+  deliverableDialog.value = true;
+}
+async function saveDeliverable(): Promise<void> {
+  if (editingDeliverable.value)
+    await sopApi.updateDeliverable(editingDeliverable.value, deliverableForm);
+  else await sopApi.createDeliverable(selectedTask.value, deliverableForm);
+  deliverableDialog.value = false;
+  ElMessage.success(editingDeliverable.value ? '交付物已更新' : '交付物已新增');
+  await refresh();
+}
+async function removeDeliverable(id: string): Promise<void> {
+  await ElMessageBox.confirm('删除交付物会同时删除草稿中的模板文件，确定继续？', '删除交付物', {
+    type: 'warning',
+  });
+  await sopApi.removeDeliverable(id);
+  ElMessage.success('交付物已删除');
+  await refresh();
+}
+function openCriterion(id: string): void {
+  selectedDeliverable.value = id;
+  Object.assign(criterionForm, {
+    name: '',
+    description: '',
+    required: true,
+    weight: 100,
+    sortOrder: 0,
+  });
+  criterionDialog.value = true;
+}
+async function saveCriterion(): Promise<void> {
+  await sopApi.createReviewCriterion(selectedDeliverable.value, criterionForm);
+  criterionDialog.value = false;
+  ElMessage.success('审核标准已新增');
+  await refresh();
+}
+async function removeCriterion(id: string): Promise<void> {
+  await sopApi.removeReviewCriterion(id);
+  await refresh();
+}
+function openTemplateUpload(id: string): void {
+  selectedDeliverable.value = id;
+  templateFile.value = undefined;
+  templateUploadDialog.value = true;
+}
+function selectTemplate(uploadFile: { raw?: File }): void {
+  templateFile.value = uploadFile.raw;
+}
+async function uploadTemplate(): Promise<void> {
+  await sopApi.uploadDeliverableTemplate(selectedDeliverable.value, templateFile.value!);
+  templateUploadDialog.value = false;
+  ElMessage.success('模板文件已上传');
+  await refresh();
+}
+async function removeTemplate(id: string): Promise<void> {
+  await ElMessageBox.confirm('确定删除该草稿模板文件？', '删除模板', { type: 'warning' });
+  await sopApi.removeDeliverableTemplate(id);
+  ElMessage.success('模板文件已删除');
+  await refresh();
+}
+function fileSize(value: string): string {
+  const bytes = Number(value);
+  return bytes < 1024 * 1024
+    ? `${Math.ceil(bytes / 1024)} KB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 </script>
 <template>
@@ -283,9 +373,6 @@ async function removeChecklist(id: string): Promise<void> {
                       ><span class="muted">
                         · {{ task.defaultDurationDays }}天 · {{ task.weight }}%</span
                       >
-                      <div v-if="task.deliverableRequired" class="muted" style="margin-top: 4px">
-                        交付物：{{ task.deliverableName }}
-                      </div>
                     </div>
                     <div
                       v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_EDIT)"
@@ -294,6 +381,8 @@ async function removeChecklist(id: string): Promise<void> {
                       <el-button size="small" text @click="editTask(task)">编辑</el-button
                       ><el-button size="small" text @click="addChecklist(task.id)"
                         >新增检查项</el-button
+                      ><el-button size="small" text @click="openDeliverable(task.id)"
+                        >新增交付物</el-button
                       ><el-button size="small" text type="danger" @click="removeTask(task.id)"
                         >删除</el-button
                       >
@@ -313,6 +402,96 @@ async function removeChecklist(id: string): Promise<void> {
                     </div>
                     <span v-if="!task.checklistItems.length" class="muted">暂无检查项</span>
                   </div>
+                  <section class="deliverable-section">
+                    <div class="deliverable-section-title">
+                      <strong>交付物</strong>
+                      <span class="muted">{{ task.deliverables.length }} 项</span>
+                    </div>
+                    <div
+                      v-for="deliverable in task.deliverables"
+                      :key="deliverable.id"
+                      class="deliverable-card"
+                    >
+                      <div class="deliverable-card-header">
+                        <div>
+                          <strong>{{ deliverable.name }}</strong>
+                          <el-tag
+                            :type="deliverable.required ? 'danger' : 'info'"
+                            size="small"
+                            effect="plain"
+                            style="margin-left: 8px"
+                            >{{ deliverable.required ? '必交' : '可选' }}</el-tag
+                          >
+                          <p v-if="deliverable.description" class="muted">
+                            {{ deliverable.description }}
+                          </p>
+                          <p class="muted">审核模式：{{ deliverable.reviewMode }}</p>
+                        </div>
+                        <div
+                          v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_EDIT)"
+                          class="toolbar-actions"
+                        >
+                          <el-button size="small" @click="openTemplateUpload(deliverable.id)"
+                            >上传模板</el-button
+                          ><el-button size="small" @click="openCriterion(deliverable.id)"
+                            >新增审核标准</el-button
+                          ><el-button size="small" @click="openDeliverable(task.id, deliverable)"
+                            >编辑</el-button
+                          ><el-button
+                            size="small"
+                            type="danger"
+                            @click="removeDeliverable(deliverable.id)"
+                            >删除</el-button
+                          >
+                        </div>
+                      </div>
+                      <div v-if="deliverable.templates.length" class="template-file-list">
+                        <div
+                          v-for="file in deliverable.templates"
+                          :key="file.id"
+                          class="template-file"
+                        >
+                          <a :href="sopApi.deliverableTemplateDownloadUrl(file.id)">{{
+                            file.fileName
+                          }}</a>
+                          <span class="muted">{{ fileSize(file.size) }}</span>
+                          <el-button
+                            v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_EDIT)"
+                            text
+                            type="danger"
+                            size="small"
+                            @click="removeTemplate(file.id)"
+                            >删除</el-button
+                          >
+                        </div>
+                      </div>
+                      <span v-else class="muted">暂无标准模板文件</span>
+                      <div class="criterion-list">
+                        <strong>审核标准</strong>
+                        <div
+                          v-for="criterion in deliverable.reviewCriteria"
+                          :key="criterion.id"
+                          class="template-file"
+                        >
+                          <span
+                            >{{ criterion.name }} · 权重 {{ criterion.weight
+                            }}<span v-if="criterion.required"> · 必需</span></span
+                          >
+                          <el-button
+                            v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_EDIT)"
+                            text
+                            type="danger"
+                            @click="removeCriterion(criterion.id)"
+                            >删除</el-button
+                          >
+                        </div>
+                        <span v-if="!deliverable.reviewCriteria.length" class="muted"
+                          >暂无审核标准</span
+                        >
+                      </div>
+                    </div>
+                    <span v-if="!task.deliverables.length" class="muted">暂无交付物定义</span>
+                  </section>
                 </div>
               </article></el-collapse-item
             ></el-collapse
@@ -358,24 +537,140 @@ async function removeChecklist(id: string): Promise<void> {
             v-model="taskForm.defaultDurationDays"
             :min="1"
             :max="3650" /></el-form-item
-        ><el-checkbox v-model="taskForm.required">必需任务</el-checkbox
-        ><el-checkbox v-model="taskForm.deliverableRequired">需要交付物</el-checkbox
-        ><template v-if="taskForm.deliverableRequired"
-          ><el-form-item label="交付物名称" required
-            ><el-input v-model.trim="taskForm.deliverableName" /></el-form-item
-          ><el-form-item label="标准模板文件"
-            ><el-input
-              v-model.trim="taskForm.deliverableTemplate"
-              placeholder="例：上线确认单.docx" /></el-form-item></template></el-form
+        ><el-checkbox v-model="taskForm.required">必需任务</el-checkbox></el-form
       ><template #footer
         ><el-button @click="taskDialog = false">取消</el-button
-        ><el-button
-          type="primary"
-          :disabled="!taskForm.name || (taskForm.deliverableRequired && !taskForm.deliverableName)"
-          @click="addTask"
+        ><el-button type="primary" :disabled="!taskForm.name" @click="addTask"
           >新增</el-button
+        ></template
+      ></el-dialog
+    ><el-dialog
+      v-model="deliverableDialog"
+      :title="editingDeliverable ? '编辑交付物' : '新增交付物'"
+      width="min(560px,94vw)"
+      destroy-on-close
+      ><el-form label-position="top"
+        ><el-form-item label="交付物名称" required
+          ><el-input v-model.trim="deliverableForm.name" /></el-form-item
+        ><el-form-item label="交付说明"
+          ><el-input
+            v-model="deliverableForm.description"
+            type="textarea"
+            :rows="3" /></el-form-item
+        ><el-form-item label="排序"
+          ><el-input-number v-model="deliverableForm.sortOrder" :min="0" /></el-form-item
+        ><el-form-item label="审核模式">
+          <el-select v-model="deliverableForm.reviewMode" style="width: 100%">
+            <el-option label="AI 默认审核，人工可覆盖" value="AI_WITH_HUMAN_OVERRIDE" />
+            <el-option label="AI 初审后必须人工终审" value="AI_THEN_HUMAN_REQUIRED" />
+            <el-option label="仅人工审核" value="HUMAN_ONLY" />
+          </el-select>
+        </el-form-item>
+        <el-form-item
+          v-if="deliverableForm.reviewMode === 'AI_WITH_HUMAN_OVERRIDE'"
+          label="AI 自动通过阈值"
+          ><el-input-number v-model="deliverableForm.aiAutoApproveThreshold" :min="0" :max="100"
+        /></el-form-item>
+        <el-form-item v-if="deliverableForm.reviewMode !== 'HUMAN_ONLY'" label="AI 审核指令"
+          ><el-input v-model="deliverableForm.aiReviewInstruction" type="textarea" :rows="3"
+        /></el-form-item>
+        <el-checkbox v-model="deliverableForm.required">必交</el-checkbox></el-form
+      ><template #footer
+        ><el-button @click="deliverableDialog = false">取消</el-button
+        ><el-button type="primary" :disabled="!deliverableForm.name" @click="saveDeliverable"
+          >保存</el-button
+        ></template
+      ></el-dialog
+    ><el-dialog
+      v-model="criterionDialog"
+      title="新增审核标准"
+      width="min(520px,94vw)"
+      destroy-on-close
+    >
+      <el-form label-position="top">
+        <el-form-item label="标准名称" required
+          ><el-input v-model.trim="criterionForm.name"
+        /></el-form-item>
+        <el-form-item label="判断说明"
+          ><el-input v-model="criterionForm.description" type="textarea" :rows="3"
+        /></el-form-item>
+        <el-form-item label="权重"
+          ><el-input-number v-model="criterionForm.weight" :min="0" :max="100"
+        /></el-form-item>
+        <el-checkbox v-model="criterionForm.required"
+          >必需标准（不通过时 AI 不可自动批准）</el-checkbox
+        >
+      </el-form>
+      <template #footer
+        ><el-button @click="criterionDialog = false">取消</el-button
+        ><el-button type="primary" :disabled="!criterionForm.name" @click="saveCriterion"
+          >新增</el-button
+        ></template
+      > </el-dialog
+    ><el-dialog
+      v-model="templateUploadDialog"
+      title="上传交付物模板"
+      width="min(520px,94vw)"
+      destroy-on-close
+      ><el-alert
+        title="支持 PDF、Office、TXT、CSV、PNG、JPG、ZIP、7Z，单文件最大 50MB"
+        type="info"
+        :closable="false"
+        style="margin-bottom: 12px"
+      /><el-upload :auto-upload="false" :limit="1" :on-change="selectTemplate"
+        ><el-button>选择模板文件</el-button></el-upload
+      ><template #footer
+        ><el-button @click="templateUploadDialog = false">取消</el-button
+        ><el-button type="primary" :disabled="!templateFile" @click="uploadTemplate"
+          >上传</el-button
         ></template
       ></el-dialog
     >
   </div>
 </template>
+
+<style scoped>
+.deliverable-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.deliverable-section-title,
+.deliverable-card-header,
+.template-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.deliverable-section-title {
+  margin-bottom: 8px;
+}
+.deliverable-card {
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.deliverable-card p {
+  margin: 4px 0 0;
+}
+.template-file-list {
+  margin-top: 8px;
+}
+.template-file {
+  justify-content: flex-start;
+  min-height: 30px;
+}
+.template-file a {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .deliverable-card-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+</style>

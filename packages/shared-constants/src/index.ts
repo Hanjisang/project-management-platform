@@ -7,6 +7,10 @@ export const PERMISSIONS = {
   PROJECT_PAUSE: 'project.pause',
   PROJECT_CLOSE: 'project.close',
   PROJECT_MEMBER_MANAGE: 'project.member.manage',
+  PROJECT_CHANGE_VIEW: 'project.change.view',
+  PROJECT_CHANGE_CREATE: 'project.change.create',
+  PROJECT_CHANGE_APPROVE: 'project.change.approve',
+  PROJECT_CHANGE_APPLY: 'project.change.apply',
   SOP_VIEW: 'sop.view',
   SOP_CREATE: 'sop.create',
   SOP_EDIT: 'sop.edit',
@@ -49,6 +53,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
   ),
   MEMBER: [
     PERMISSIONS.PROJECT_VIEW,
+    PERMISSIONS.PROJECT_CHANGE_VIEW,
     PERMISSIONS.PLAN_VIEW,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.TASK_CREATE,
@@ -66,6 +71,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, PermissionCode[]> = {
   ],
   VIEWER: [
     PERMISSIONS.PROJECT_VIEW,
+    PERMISSIONS.PROJECT_CHANGE_VIEW,
     PERMISSIONS.PLAN_VIEW,
     PERMISSIONS.TASK_VIEW,
     PERMISSIONS.ISSUE_VIEW,

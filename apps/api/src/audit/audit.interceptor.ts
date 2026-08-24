@@ -31,7 +31,12 @@ export class AuditInterceptor implements NestInterceptor {
             metadata.action,
             metadata.resourceType,
             this.parameter(
-              request.params.id ?? request.params.projectId ?? request.params.documentId,
+              request.params.id ??
+                request.params.projectId ??
+                request.params.documentId ??
+                request.params.taskId ??
+                request.params.deliverableId ??
+                request.params.templateId,
             ),
             undefined,
             data,

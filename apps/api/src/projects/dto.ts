@@ -22,6 +22,7 @@ export class CreateProjectDto {
   @ApiProperty() @IsString() @Length(2, 200) name!: string;
   @ApiProperty() @IsString() @Length(2, 200) customerName!: string;
   @ApiProperty() @IsString() managerUserId!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() approverUserId?: string;
   @ApiPropertyOptional() @IsOptional() @Type(() => Date) @IsDate() plannedStartDate?: Date;
   @ApiPropertyOptional() @IsOptional() @Type(() => Date) @IsDate() plannedGoLiveDate?: Date;
   @ApiPropertyOptional() @IsOptional() @IsString() @Length(0, 5000) description?: string;
@@ -30,6 +31,7 @@ export class UpdateProjectDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @Length(2, 200) name?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @Length(2, 200) customerName?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() managerUserId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() approverUserId?: string;
   @ApiPropertyOptional({ enum: ProjectHealth })
   @IsOptional()
   @IsEnum(ProjectHealth)

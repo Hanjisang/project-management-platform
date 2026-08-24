@@ -4,6 +4,7 @@ import type { ProjectScopeService } from '../auth/project-scope.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import { DocumentsService } from './documents.service';
 import type { StorageProvider } from './storage.provider';
+import type { ProgressService } from '../project-plans/progress.service';
 
 const user: RequestUser = {
   id: 'user-id',
@@ -18,6 +19,7 @@ const file = {
   size: 10,
   buffer: Buffer.from('acceptance'),
 } as Express.Multer.File;
+const progress = { recomputePlanTask: vi.fn() } as unknown as ProgressService;
 
 describe('DocumentsService storage consistency', () => {
   it('deletes the stored object when the database transaction fails', async () => {
@@ -39,7 +41,7 @@ describe('DocumentsService storage consistency', () => {
     } as unknown as ProjectScopeService;
 
     await expect(
-      new DocumentsService(prisma, scope, storage).create(
+      new DocumentsService(prisma, scope, progress, storage).create(
         user,
         'project-id',
         { name: 'Acceptance', version: 'V1.0' },
@@ -75,7 +77,7 @@ describe('DocumentsService storage consistency', () => {
     } as unknown as ProjectScopeService;
 
     await expect(
-      new DocumentsService(prisma, scope, storage).remove(user, 'document-id'),
+      new DocumentsService(prisma, scope, progress, storage).remove(user, 'document-id'),
     ).resolves.toBeUndefined();
     expect(cleanup).toHaveBeenCalledWith({
       where: { objectKey: '2026/orphan.txt' },
@@ -101,7 +103,7 @@ describe('DocumentsService storage consistency', () => {
     const scope = { assert: vi.fn() } as unknown as ProjectScopeService;
     const storage = {} as StorageProvider;
     await expect(
-      new DocumentsService(prisma, scope, storage).review(user, 'document-id', {
+      new DocumentsService(prisma, scope, progress, storage).review(user, 'document-id', {
         status: 'APPROVED',
       }),
     ).rejects.toMatchObject({ response: { code: 'DOCUMENT_REVIEW_STATE_INVALID' } });
@@ -126,7 +128,10 @@ describe('DocumentsService storage consistency', () => {
         .mockImplementation((callback: (client: typeof tx) => unknown) => callback(tx)),
     } as unknown as PrismaService;
     const scope = { assert: vi.fn() } as unknown as ProjectScopeService;
-    await new DocumentsService(prisma, scope, {} as StorageProvider).submit(user, 'document-id');
+    await new DocumentsService(prisma, scope, progress, {} as StorageProvider).submit(
+      user,
+      'document-id',
+    );
     expect(update).toHaveBeenCalledWith({
       where: { id: 'document-id' },
       data: { status: 'PENDING_REVIEW' },

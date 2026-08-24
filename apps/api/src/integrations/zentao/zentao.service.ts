@@ -21,7 +21,7 @@ export class ZentaoService {
     };
   }
   async syncTask(user: RequestUser, taskId: string) {
-    const task = await this.prisma.task.findUnique({
+    const task = await this.prisma.projectWorkItem.findUnique({
       where: { id: taskId },
       include: { zentaoSync: true },
     });
@@ -33,8 +33,8 @@ export class ZentaoService {
       task.zentaoSync?.idempotencyKey ??
       createHash('sha256').update(`zentao:${task.id}`).digest('hex');
     await this.prisma.zentaoTaskSync.upsert({
-      where: { taskId },
-      create: { taskId, idempotencyKey },
+      where: { workItemId: taskId },
+      create: { workItemId: taskId, idempotencyKey },
       update: { syncStatus: 'PENDING', lastError: null },
     });
     try {
@@ -43,7 +43,7 @@ export class ZentaoService {
         idempotencyKey,
       );
       return this.prisma.zentaoTaskSync.update({
-        where: { taskId },
+        where: { workItemId: taskId },
         data: {
           externalTaskId,
           syncStatus: 'SUCCEEDED',
@@ -53,7 +53,7 @@ export class ZentaoService {
       });
     } catch (error) {
       await this.prisma.zentaoTaskSync.update({
-        where: { taskId },
+        where: { workItemId: taskId },
         data: {
           syncStatus: 'FAILED',
           lastError: error instanceof Error ? error.message : String(error),
@@ -64,8 +64,8 @@ export class ZentaoService {
   }
   async list(user: RequestUser) {
     return this.prisma.zentaoTaskSync.findMany({
-      where: { task: { project: this.scope.where(user) } },
-      include: { task: { include: { project: { select: { id: true, name: true } } } } },
+      where: { workItem: { project: this.scope.where(user) } },
+      include: { workItem: { include: { project: { select: { id: true, name: true } } } } },
       orderBy: { lastSyncedAt: 'desc' },
     });
   }

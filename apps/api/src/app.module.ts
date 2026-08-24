@@ -20,7 +20,9 @@ import { RolesModule } from './roles/roles.module';
 import { ProjectsModule } from './projects/projects.module';
 import { SopModule } from './sop/sop.module';
 import { ProjectPlansModule } from './project-plans/project-plans.module';
-import { TasksModule } from './tasks/tasks.module';
+import { WorkItemsModule } from './work-items/work-items.module';
+import { ProjectChangesModule } from './project-changes/project-changes.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { IssuesModule } from './issues/issues.module';
 import { DocumentsModule } from './documents/documents.module';
 import { AiModule } from './integrations/ai/ai.module';
@@ -61,7 +63,9 @@ import { ZentaoModule } from './integrations/zentao/zentao.module';
     ProjectsModule,
     SopModule,
     ProjectPlansModule,
-    TasksModule,
+    WorkItemsModule,
+    ProjectChangesModule,
+    NotificationsModule,
     IssuesModule,
     DocumentsModule,
     AiModule,

@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const baseURL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:5173';
+const baseURL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:5174';
 const useExistingServer = process.env.E2E_USE_EXISTING_SERVER === 'true';
 
 export default defineConfig({
@@ -16,7 +16,7 @@ export default defineConfig({
         {
           command: 'npm run dev -w @pmp/api',
           url: 'http://127.0.0.1:3000/health',
-          reuseExistingServer: !process.env.CI,
+          reuseExistingServer: false,
           timeout: 120_000,
           env: {
             ...process.env,
@@ -28,9 +28,9 @@ export default defineConfig({
         },
         {
           command:
-            'npm run build -w @pmp/shared-types && npm run build -w @pmp/shared-constants && npm run build -w @pmp/shared-utils && npm run build -w @pmp/web && npm run preview -w @pmp/web',
-          url: 'http://127.0.0.1:5173',
-          reuseExistingServer: !process.env.CI,
+            'npm run build -w @pmp/shared-types && npm run build -w @pmp/shared-constants && npm run build -w @pmp/shared-utils && npm run build -w @pmp/web && npm run preview -w @pmp/web -- --port 5174',
+          url: 'http://127.0.0.1:5174',
+          reuseExistingServer: false,
           timeout: 120_000,
         },
       ],

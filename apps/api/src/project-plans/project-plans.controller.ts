@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { PERMISSIONS } from '@pmp/shared-constants';
+import type { Response } from 'express';
 import {
   AuditAction,
   CurrentUser,
@@ -8,7 +9,7 @@ import {
   RequireProjectAccess,
 } from '../common/decorators';
 import type { RequestUser } from '../common/types';
-import { CompleteChecklistDto, GeneratePlanDto, SyncPlanDto, UpdatePlanTaskDto } from './dto';
+import { GeneratePlanDto, SyncPlanDto } from './dto';
 import { ProjectPlansService } from './project-plans.service';
 
 @ApiTags('Project Plans')
@@ -32,25 +33,20 @@ export class ProjectPlansController {
   ) {
     return this.service.generate(user, projectId, dto);
   }
-  @Patch('plan-tasks/:id')
-  @RequirePermissions(PERMISSIONS.PLAN_EDIT)
-  @AuditAction('plan.task.update', 'ProjectPlanTask')
-  updateTask(
+  @Get('project-deliverable-templates/:id/download')
+  @RequirePermissions(PERMISSIONS.PLAN_VIEW)
+  async downloadDeliverableTemplate(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
-    @Body() dto: UpdatePlanTaskDto,
-  ) {
-    return this.service.updateTask(user, id, dto);
-  }
-  @Patch('checklist-items/:id')
-  @RequirePermissions(PERMISSIONS.PLAN_EDIT)
-  @AuditAction('plan.checklist.complete', 'ProjectChecklistItem')
-  complete(
-    @CurrentUser() user: RequestUser,
-    @Param('id') id: string,
-    @Body() dto: CompleteChecklistDto,
-  ) {
-    return this.service.completeChecklist(user, id, dto);
+    @Res() response: Response,
+  ): Promise<void> {
+    const file = await this.service.downloadDeliverableTemplate(user, id);
+    response.setHeader('content-type', file.mimeType);
+    response.setHeader(
+      'content-disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+    );
+    response.send(file.buffer);
   }
   @Get('projects/:projectId/plan/sync-preview')
   @RequirePermissions(PERMISSIONS.PLAN_EDIT)
