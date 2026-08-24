@@ -1,42 +1,70 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, toRef, watch } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage } from 'element-plus';
 import { projectsApi } from '../../api/projects.api';
+import { PERMISSIONS } from '@pmp/shared-constants';
+import { useAuthStore } from '../../stores/auth';
+import RemoteUserSelect from '../../components/RemoteUserSelect.vue';
+import ApiErrorView from '../../components/ApiErrorView.vue';
+import { projectQueryKey } from '../../composables/project-query';
+import { cloneMemberRows } from './member-edit-state';
+import type { ProjectRole } from '@pmp/shared-types';
 const props = defineProps<{ projectId: string }>();
+const projectId = toRef(props, 'projectId');
+const auth = useAuthStore();
 const client = useQueryClient();
 const editing = ref(false);
-const rows = ref<Array<{ userId: string; projectRole: string }>>([]);
+const rows = ref<Array<{ userId: string; projectRole: ProjectRole }>>([]);
+const snapshot = ref<Array<{ userId: string; projectRole: ProjectRole }>>([]);
 const members = useQuery({
-  queryKey: ['project-members', props.projectId],
-  queryFn: () => projectsApi.members(props.projectId),
+  queryKey: projectQueryKey('project-members', projectId),
+  queryFn: () => projectsApi.members(projectId.value),
 });
-const users = useQuery({ queryKey: ['project-user-options'], queryFn: projectsApi.userOptions });
+const users = useQuery({
+  queryKey: ['project-user-options'],
+  queryFn: () => projectsApi.userOptions({ page: 1, pageSize: 20 }),
+});
 watch(
   () => members.data.value,
   (value) => {
     if (value?.members)
-      rows.value = value.members.map((item) => ({
+      snapshot.value = value.members.map((item) => ({
         userId: item.userId,
         projectRole: item.projectRole,
       }));
+    if (!editing.value) rows.value = cloneMemberRows(snapshot.value);
   },
   { immediate: true },
 );
 const save = useMutation({
-  mutationFn: () => projectsApi.setMembers(props.projectId, rows.value),
+  mutationFn: () => projectsApi.setMembers(projectId.value, rows.value),
   onSuccess: async () => {
     ElMessage.success('项目成员已更新');
     editing.value = false;
-    await client.invalidateQueries({ queryKey: ['project-members', props.projectId] });
+    snapshot.value = cloneMemberRows(rows.value);
+    await client.invalidateQueries({ queryKey: ['project-members', projectId.value] });
   },
   onError: (error: Error) => ElMessage.error(error.message),
 });
 function add(): void {
-  const candidate = users.data.value?.find(
+  const candidate = users.data.value?.items.find(
     (user) => !rows.value.some((row) => row.userId === user.id),
   );
   if (candidate) rows.value.push({ userId: candidate.id, projectRole: 'IMPLEMENTER' });
+}
+function retryMembers(): void {
+  void members.refetch();
+  void users.refetch();
+}
+function toggleEditing(): void {
+  if (editing.value) {
+    rows.value = cloneMemberRows(snapshot.value);
+    editing.value = false;
+    return;
+  }
+  snapshot.value = cloneMemberRows(rows.value);
+  editing.value = true;
 }
 </script>
 <template>
@@ -46,11 +74,20 @@ function add(): void {
         <h2 style="font-size: 16px">项目成员</h2>
         <p>项目角色与平台 RBAC 角色相互独立</p>
       </div>
-      <el-button type="primary" @click="editing = !editing">{{
-        editing ? '取消' : '管理成员'
-      }}</el-button>
+      <el-button
+        v-if="auth.has(PERMISSIONS.PROJECT_MEMBER_MANAGE)"
+        type="primary"
+        @click="toggleEditing"
+        >{{ editing ? '取消' : '管理成员' }}</el-button
+      >
     </div>
-    <div v-if="!editing" class="table-wrap">
+    <ApiErrorView
+      v-if="members.isError.value || (editing && users.isError.value)"
+      :error="members.error.value ?? users.error.value"
+      title="项目成员加载失败"
+      @retry="retryMembers"
+    />
+    <div v-else-if="!editing" class="table-wrap">
       <el-table :data="members.data.value?.members ?? []"
         ><el-table-column prop="user.displayName" label="成员" min-width="150" /><el-table-column
           prop="user.username"
@@ -65,15 +102,7 @@ function add(): void {
         class="filter-row"
         style="margin-bottom: 10px"
       >
-        <el-select v-model="row.userId" filterable style="width: 240px"
-          ><el-option
-            v-for="user in users.data.value ?? []"
-            :key="user.id"
-            :label="`${user.displayName} (${user.username})`"
-            :value="user.id"
-            :disabled="
-              rows.some((entry, i) => i !== index && entry.userId === user.id)
-            " /></el-select
+        <RemoteUserSelect v-model="row.userId" style="width: 240px" />
         ><el-select v-model="row.projectRole" style="width: 180px"
           ><el-option
             v-for="role in [

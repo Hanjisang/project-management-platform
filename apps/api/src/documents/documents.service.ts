@@ -1,4 +1,10 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -89,11 +95,12 @@ export class DocumentsService {
     dto: CreateDocumentVersionDto,
     file: Express.Multer.File | undefined,
   ) {
-    await this.getScoped(user, documentId);
+    const document = await this.getScoped(user, documentId);
     this.validateFile(file);
     const stored = await this.storage.put(file.originalname, file.buffer);
     try {
       return await this.prisma.$transaction(async (tx) => {
+        await assertProjectWritable(tx, document.projectId);
         const version = await tx.documentVersion.create({
           data: {
             documentId,
@@ -115,14 +122,21 @@ export class DocumentsService {
     }
   }
   async review(user: RequestUser, documentId: string, dto: ReviewDocumentDto) {
-    await this.getScoped(user, documentId);
-    const documentStatus =
-      dto.status === 'APPROVED'
-        ? 'APPROVED'
-        : dto.status === 'REJECTED'
-          ? 'REJECTED'
-          : 'PENDING_REVIEW';
+    const document = await this.getScoped(user, documentId);
+    if (document.status !== 'PENDING_REVIEW')
+      throw new ConflictException({
+        code: 'DOCUMENT_REVIEW_STATE_INVALID',
+        message: '只能审核待审核文档',
+        details: { status: document.status },
+      });
+    if (!['APPROVED', 'REJECTED'].includes(dto.status))
+      throw new BadRequestException({
+        code: 'DOCUMENT_REVIEW_DECISION_REQUIRED',
+        message: '审核结果必须为通过或驳回',
+      });
+    const documentStatus = dto.status === 'APPROVED' ? 'APPROVED' : 'REJECTED';
     return this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, document.projectId);
       const review = await tx.documentReview.upsert({
         where: { documentId_reviewerId: { documentId, reviewerId: user.id } },
         create: {
@@ -130,16 +144,29 @@ export class DocumentsService {
           reviewerId: user.id,
           status: dto.status,
           comment: dto.comment,
-          reviewedAt: dto.status === 'PENDING' ? null : new Date(),
+          reviewedAt: new Date(),
         },
         update: {
           status: dto.status,
           comment: dto.comment,
-          reviewedAt: dto.status === 'PENDING' ? null : new Date(),
+          reviewedAt: new Date(),
         },
       });
       await tx.document.update({ where: { id: documentId }, data: { status: documentStatus } });
       return review;
+    });
+  }
+  async submit(user: RequestUser, documentId: string) {
+    const document = await this.getScoped(user, documentId);
+    if (!['DRAFT', 'REJECTED'].includes(document.status))
+      throw new ConflictException({
+        code: 'DOCUMENT_SUBMIT_STATE_INVALID',
+        message: '只有草稿或已驳回文档可以提交审核',
+        details: { status: document.status },
+      });
+    return this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, document.projectId);
+      return tx.document.update({ where: { id: documentId }, data: { status: 'PENDING_REVIEW' } });
     });
   }
   async download(user: RequestUser, versionId: string) {
@@ -162,6 +189,7 @@ export class DocumentsService {
   async remove(user: RequestUser, documentId: string): Promise<void> {
     const document = await this.getScoped(user, documentId);
     const versions = await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, document.projectId);
       const items = await tx.documentVersion.findMany({
         where: { documentId },
         select: { objectKey: true },

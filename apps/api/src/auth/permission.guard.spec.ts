@@ -37,4 +37,18 @@ describe('PermissionGuard', () => {
       ),
     ).toBe(true);
   });
+
+  it('supports explicit OR permissions for option endpoints', () => {
+    const reflector = {
+      getAllAndOverride: vi
+        .fn()
+        .mockReturnValueOnce([])
+        .mockReturnValueOnce(['project.create', 'project.member.manage']),
+    } as unknown as Reflector;
+    expect(
+      new PermissionGuard(reflector).canActivate(
+        context({ isAdministrator: false, permissions: ['project.member.manage'] }),
+      ),
+    ).toBe(true);
+  });
 });

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { projectsApi } from '../../api/projects.api';
@@ -8,40 +8,60 @@ import { tasksApi } from '../../api/tasks.api';
 import { issuesApi } from '../../api/issues.api';
 import { messagesApi } from '../../api/messages.api';
 import { reportsApi } from '../../api/reports.api';
+import { PERMISSIONS } from '@pmp/shared-constants';
+import { useAuthStore } from '../../stores/auth';
 import StatusTag from '../../components/StatusTag.vue';
+import ApiErrorView from '../../components/ApiErrorView.vue';
 import ProjectPlanPanel from './ProjectPlanPanel.vue';
 import ProjectMembersPanel from './ProjectMembersPanel.vue';
 import ProjectDocumentsPanel from './ProjectDocumentsPanel.vue';
+import { projectQueryKey } from '../../composables/project-query';
+import type { ProjectHealth } from '@pmp/shared-types';
 const route = useRoute();
-const projectId = String(route.params.id);
-const tab = ref(sessionStorage.getItem(`pmp:project-tab:${projectId}`) ?? 'overview');
+const router = useRouter();
+const auth = useAuthStore();
+const projectId = computed(() => String(route.params.id));
+const tab = ref(sessionStorage.getItem(`pmp:project-tab:${projectId.value}`) ?? 'overview');
+watch(projectId, (id) => {
+  tab.value = sessionStorage.getItem(`pmp:project-tab:${id}`) ?? 'overview';
+});
 const client = useQueryClient();
+const editDialog = ref(false);
+const editForm = reactive({
+  name: '',
+  customerName: '',
+  description: '',
+  managerUserId: '',
+  plannedStartDate: '',
+  plannedGoLiveDate: '',
+  healthOverride: '' as ProjectHealth | '',
+});
 const project = useQuery({
-  queryKey: ['project', projectId],
-  queryFn: () => projectsApi.get(projectId),
+  queryKey: projectQueryKey('project', projectId),
+  queryFn: () => projectsApi.get(projectId.value),
 });
 const tasks = useQuery({
-  queryKey: ['tasks', projectId],
-  queryFn: () => tasksApi.list({ projectId, pageSize: 100 }),
+  queryKey: projectQueryKey('tasks', projectId),
+  queryFn: () => tasksApi.list({ projectId: projectId.value, pageSize: 20 }),
 });
 const issues = useQuery({
-  queryKey: ['issues', projectId],
-  queryFn: () => issuesApi.list({ projectId, pageSize: 100 }),
+  queryKey: projectQueryKey('issues', projectId),
+  queryFn: () => issuesApi.list({ projectId: projectId.value, pageSize: 20 }),
 });
 const messages = useQuery({
-  queryKey: ['messages', projectId],
-  queryFn: () => messagesApi.list({ projectId, pageSize: 100 }),
+  queryKey: projectQueryKey('messages', projectId),
+  queryFn: () => messagesApi.list({ projectId: projectId.value, pageSize: 20 }),
 });
 const reports = useQuery({
-  queryKey: ['daily-reports', projectId],
-  queryFn: () => reportsApi.daily({ projectId }),
+  queryKey: projectQueryKey('daily-reports', projectId),
+  queryFn: () => reportsApi.daily({ projectId: projectId.value }),
 });
 const lifecycle = useMutation({
   mutationFn: (action: 'start' | 'pause' | 'resume' | 'close') =>
-    projectsApi.action(projectId, action),
+    projectsApi.action(projectId.value, action),
   onSuccess: async () => {
     ElMessage.success('项目状态已更新');
-    await client.invalidateQueries({ queryKey: ['project', projectId] });
+    await client.invalidateQueries({ queryKey: ['project', projectId.value] });
     await client.invalidateQueries({ queryKey: ['projects'] });
   },
   onError: (error: Error) => ElMessage.error(error.message),
@@ -53,8 +73,42 @@ async function action(value: 'start' | 'pause' | 'resume' | 'close'): Promise<vo
     });
   lifecycle.mutate(value);
 }
+function openEdit(): void {
+  const value = project.data.value;
+  if (!value) return;
+  Object.assign(editForm, {
+    name: value.name,
+    customerName: value.customerName,
+    description: value.description ?? '',
+    managerUserId: value.managerUserId,
+    plannedStartDate: value.plannedStartDate?.slice(0, 10) ?? '',
+    plannedGoLiveDate: value.plannedGoLiveDate?.slice(0, 10) ?? '',
+    healthOverride: value.health === value.derivedHealth ? '' : value.health,
+  });
+  editDialog.value = true;
+}
+async function saveProject(): Promise<void> {
+  await projectsApi.update(projectId.value, {
+    ...editForm,
+    plannedStartDate: editForm.plannedStartDate || undefined,
+    plannedGoLiveDate: editForm.plannedGoLiveDate || undefined,
+    healthOverride: editForm.healthOverride || null,
+  });
+  editDialog.value = false;
+  ElMessage.success('项目已更新');
+  await client.invalidateQueries({ queryKey: ['project', projectId.value] });
+  await client.invalidateQueries({ queryKey: ['projects'] });
+}
+async function removeProject(): Promise<void> {
+  await ElMessageBox.confirm('删除后项目将从列表隐藏，进行中项目不能删除。', '删除项目', {
+    type: 'warning',
+  });
+  await projectsApi.remove(projectId.value);
+  ElMessage.success('项目已删除');
+  await router.push('/projects');
+}
 function changeTab(value: string | number): void {
-  sessionStorage.setItem(`pmp:project-tab:${projectId}`, String(value));
+  sessionStorage.setItem(`pmp:project-tab:${projectId.value}`, String(value));
 }
 </script>
 <template>
@@ -78,20 +132,42 @@ function changeTab(value: string | number): void {
           </div>
         </div>
         <div class="toolbar-actions">
+          <el-button
+            v-if="
+              auth.has(PERMISSIONS.PROJECT_EDIT) &&
+              !['COMPLETED', 'CANCELLED'].includes(project.data.value.status)
+            "
+            @click="openEdit"
+            >编辑</el-button
+          >
+          <el-button
+            v-if="auth.has(PERMISSIONS.PROJECT_DELETE) && project.data.value.status !== 'ACTIVE'"
+            type="danger"
+            plain
+            @click="removeProject"
+            >删除</el-button
+          >
           <StatusTag :value="project.data.value.status" /><el-button
-            v-if="project.data.value.status === 'NOT_STARTED'"
+            v-if="
+              project.data.value.status === 'NOT_STARTED' && auth.has(PERMISSIONS.PROJECT_START)
+            "
             type="primary"
             @click="action('start')"
             >启动项目</el-button
-          ><el-button v-if="project.data.value.status === 'ACTIVE'" @click="action('pause')"
+          ><el-button
+            v-if="project.data.value.status === 'ACTIVE' && auth.has(PERMISSIONS.PROJECT_PAUSE)"
+            @click="action('pause')"
             >暂停</el-button
           ><el-button
-            v-if="project.data.value.status === 'PAUSED'"
+            v-if="project.data.value.status === 'PAUSED' && auth.has(PERMISSIONS.PROJECT_PAUSE)"
             type="primary"
             @click="action('resume')"
             >恢复</el-button
           ><el-button
-            v-if="['ACTIVE', 'PAUSED'].includes(project.data.value.status)"
+            v-if="
+              ['ACTIVE', 'PAUSED'].includes(project.data.value.status) &&
+              auth.has(PERMISSIONS.PROJECT_CLOSE)
+            "
             type="success"
             @click="action('close')"
             >项目结项</el-button
@@ -129,7 +205,12 @@ function changeTab(value: string | number): void {
         ><el-tab-pane label="实施计划" name="plan"
           ><ProjectPlanPanel :project-id="projectId" /></el-tab-pane
         ><el-tab-pane label="任务" name="tasks"
-          ><div class="table-wrap">
+          ><ApiErrorView
+            v-if="tasks.isError.value"
+            :error="tasks.error.value"
+            title="项目任务加载失败"
+            @retry="tasks.refetch()" />
+          <div v-else class="table-wrap">
             <el-table :data="tasks.data.value?.items ?? []"
               ><el-table-column prop="title" label="任务" min-width="200" /><el-table-column
                 prop="owner.displayName"
@@ -140,7 +221,12 @@ function changeTab(value: string | number): void {
               ><el-table-column prop="dueDate" label="截止日期" width="120"
             /></el-table></div></el-tab-pane
         ><el-tab-pane label="问题风险" name="issues"
-          ><div class="table-wrap">
+          ><ApiErrorView
+            v-if="issues.isError.value"
+            :error="issues.error.value"
+            title="项目问题加载失败"
+            @retry="issues.refetch()" />
+          <div v-else class="table-wrap">
             <el-table :data="issues.data.value?.items ?? []"
               ><el-table-column prop="title" label="问题" min-width="200" /><el-table-column
                 prop="type"
@@ -155,7 +241,12 @@ function changeTab(value: string | number): void {
         ><el-tab-pane label="交付物" name="documents"
           ><ProjectDocumentsPanel :project-id="projectId" /></el-tab-pane
         ><el-tab-pane label="项目消息" name="messages"
-          ><div class="table-wrap">
+          ><ApiErrorView
+            v-if="messages.isError.value"
+            :error="messages.error.value"
+            title="项目消息加载失败"
+            @retry="messages.refetch()" />
+          <div v-else class="table-wrap">
             <el-table :data="messages.data.value?.items ?? []"
               ><el-table-column prop="receivedAt" label="时间" width="180" /><el-table-column
                 prop="senderName"
@@ -169,7 +260,13 @@ function changeTab(value: string | number): void {
                   ><StatusTag :value="scope.row.status" /></template></el-table-column
             ></el-table></div></el-tab-pane
         ><el-tab-pane label="日报周报" name="reports"
-          ><div class="table-wrap">
+          ><ApiErrorView
+            v-if="reports.isError.value"
+            :error="reports.error.value"
+            title="项目日报加载失败"
+            @retry="reports.refetch()"
+          />
+          <div v-else class="table-wrap">
             <el-table :data="reports.data.value ?? []"
               ><el-table-column prop="reportDate" label="日期" width="130" /><el-table-column
                 prop="reporter.displayName"
@@ -188,5 +285,55 @@ function changeTab(value: string | number): void {
           ><el-empty
             description="项目写操作已记入全局审计日志，请在系统管理中检索" /></el-tab-pane></el-tabs
     ></template>
+    <el-dialog v-model="editDialog" title="编辑项目" width="min(640px,94vw)" destroy-on-close
+      ><el-form label-position="top"
+        ><div class="content-grid">
+          <el-form-item label="项目名称" required
+            ><el-input v-model.trim="editForm.name" /></el-form-item
+          ><el-form-item label="客户名称" required
+            ><el-input v-model.trim="editForm.customerName" /></el-form-item
+          ><el-form-item label="负责人"
+            ><el-select v-model="editForm.managerUserId" style="width: 100%"
+              ><el-option
+                v-for="member in project.data.value?.members ?? []"
+                :key="member.userId"
+                :label="member.user.displayName"
+                :value="member.userId" /></el-select></el-form-item
+          ><el-form-item label="健康度覆盖"
+            ><el-select v-model="editForm.healthOverride" clearable style="width: 100%"
+              ><el-option label="自动计算" value="" /><el-option
+                label="正常"
+                value="NORMAL" /><el-option label="预警" value="WARNING" /><el-option
+                label="高风险"
+                value="HIGH_RISK" /></el-select></el-form-item
+          ><el-form-item label="计划开始"
+            ><el-date-picker
+              v-model="editForm.plannedStartDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width: 100%" /></el-form-item
+          ><el-form-item label="计划上线"
+            ><el-date-picker
+              v-model="editForm.plannedGoLiveDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width: 100%"
+          /></el-form-item>
+        </div>
+        <el-form-item label="说明"
+          ><el-input
+            v-model="editForm.description"
+            type="textarea"
+            :rows="3" /></el-form-item></el-form
+      ><template #footer
+        ><el-button @click="editDialog = false">取消</el-button
+        ><el-button
+          type="primary"
+          :disabled="!editForm.name || !editForm.customerName"
+          @click="saveProject"
+          >保存</el-button
+        ></template
+      ></el-dialog
+    >
   </div>
 </template>

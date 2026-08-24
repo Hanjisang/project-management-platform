@@ -1,30 +1,38 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { messagesApi } from '../../api/messages.api';
-import { projectsApi } from '../../api/projects.api';
 import PageHeader from '../../components/PageHeader.vue';
 import StatusTag from '../../components/StatusTag.vue';
+import RemoteProjectSelect from '../../components/RemoteProjectSelect.vue';
+import ApiErrorView from '../../components/ApiErrorView.vue';
+import { PERMISSIONS } from '@pmp/shared-constants';
+import { useAuthStore } from '../../stores/auth';
 import type { MessageRecord, PendingAction } from '../../types/domain';
+import type { MessageStatus } from '@pmp/shared-types';
 const client = useQueryClient();
 const dialog = ref(false);
-const filters = reactive({ projectId: '', status: '' });
+const auth = useAuthStore();
+const page = ref(1);
+const pageSize = ref(20);
+const filters = reactive({ projectId: '', status: '' as MessageStatus | '' });
 const form = reactive({ projectId: '', senderName: '', content: '' });
-const projects = useQuery({
-  queryKey: ['projects', 'message-selector'],
-  queryFn: () => projectsApi.list({ pageSize: 100 }),
-});
+function resetCreateForm(): void {
+  Object.assign(form, { projectId: '', senderName: '', content: '' });
+}
 const query = useQuery({
-  queryKey: ['messages', filters],
-  queryFn: () => messagesApi.list({ ...filters, pageSize: 100 }),
+  queryKey: computed(() => ['messages', { ...filters }, page.value, pageSize.value]),
+  queryFn: () => messagesApi.list({ ...filters, page: page.value, pageSize: pageSize.value }),
 });
+watch(filters, () => (page.value = 1), { deep: true });
 const ai = useQuery({ queryKey: ['ai-status'], queryFn: messagesApi.aiStatus });
 const create = useMutation({
   mutationFn: () => messagesApi.create({ ...form, projectId: form.projectId || undefined }),
   onSuccess: async () => {
     ElMessage.success('消息已录入');
     dialog.value = false;
+    resetCreateForm();
     await client.invalidateQueries({ queryKey: ['messages'] });
   },
   onError: (error: Error) => ElMessage.error(error.message),
@@ -62,7 +70,9 @@ async function decide(
     <PageHeader
       title="消息中心"
       description="所有来源先进入 Message，AI 只生成 PendingAction，人工确认后才写入业务数据"
-      ><el-button type="primary" @click="dialog = true">人工录入</el-button></PageHeader
+      ><el-button v-if="auth.has(PERMISSIONS.MESSAGE_CREATE)" type="primary" @click="dialog = true"
+        >人工录入</el-button
+      ></PageHeader
     ><el-alert
       v-if="ai.data.value && !ai.data.value.configured"
       title="AI 服务未配置"
@@ -74,17 +84,11 @@ async function decide(
     />
     <div class="filters">
       <div class="filter-row">
-        <el-select
+        <RemoteProjectSelect
           v-model="filters.projectId"
-          clearable
-          filterable
-          placeholder="项目"
+          placeholder="搜索项目"
           style="width: 240px"
-          ><el-option
-            v-for="project in projects.data.value?.items ?? []"
-            :key="project.id"
-            :label="project.name"
-            :value="project.id" /></el-select
+        />
         ><el-select v-model="filters.status" clearable placeholder="状态" style="width: 180px"
           ><el-option
             v-for="item in [
@@ -101,7 +105,13 @@ async function decide(
         /></el-select>
       </div>
     </div>
-    <div style="display: grid; gap: 12px">
+    <ApiErrorView
+      v-if="query.isError.value"
+      :error="query.error.value"
+      title="消息列表加载失败"
+      @retry="query.refetch()"
+    />
+    <div v-else style="display: grid; gap: 12px">
       <article v-for="item in query.data.value?.items ?? []" :key="item.id" class="panel">
         <div class="panel-header">
           <div>
@@ -117,7 +127,10 @@ async function decide(
           <p style="white-space: pre-wrap; line-height: 1.7">{{ item.content }}</p>
           <div class="toolbar-actions">
             <el-button
-              v-if="['RECEIVED', 'FAILED'].includes(item.status)"
+              v-if="
+                auth.has(PERMISSIONS.MESSAGE_ANALYZE) &&
+                ['RECEIVED', 'FAILED'].includes(item.status)
+              "
               type="primary"
               plain
               :disabled="!ai.data.value?.configured"
@@ -144,7 +157,10 @@ async function decide(
                   {{ JSON.stringify(action.payload) }}
                 </div>
               </div>
-              <div v-if="action.status === 'PENDING'" class="toolbar-actions">
+              <div
+                v-if="action.status === 'PENDING' && auth.has(PERMISSIONS.MESSAGE_CONFIRM)"
+                class="toolbar-actions"
+              >
                 <el-button type="success" size="small" @click="decide(item, action, 'CONFIRM')"
                   >确认</el-button
                 ><el-button size="small" @click="decide(item, action, 'REJECT')">拒绝</el-button>
@@ -154,16 +170,24 @@ async function decide(
         </div>
       </article>
       <el-empty v-if="!query.data.value?.items.length" description="暂无消息" />
+      <el-pagination
+        v-if="query.data.value?.total"
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :total="query.data.value.total"
+        :page-sizes="[10, 20, 50]"
+        layout="total, sizes, prev, pager, next"
+      />
     </div>
-    <el-dialog v-model="dialog" title="人工录入项目消息" width="min(620px,94vw)"
+    <el-dialog
+      v-model="dialog"
+      title="人工录入项目消息"
+      width="min(620px,94vw)"
+      destroy-on-close
+      @closed="resetCreateForm"
       ><el-form label-position="top"
         ><el-form-item label="所属项目"
-          ><el-select v-model="form.projectId" clearable filterable style="width: 100%"
-            ><el-option
-              v-for="project in projects.data.value?.items ?? []"
-              :key="project.id"
-              :label="project.name"
-              :value="project.id" /></el-select></el-form-item
+          ><RemoteProjectSelect v-model="form.projectId" /></el-form-item
         ><el-form-item label="发送人" required
           ><el-input v-model.trim="form.senderName" /></el-form-item
         ><el-form-item label="消息内容" required

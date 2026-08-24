@@ -10,4 +10,4 @@ if (-not (Test-Path $EnvFile)) {
 
 docker compose --env-file $EnvFile up --build -d
 docker compose --env-file $EnvFile ps
-Write-Host "部署完成：请访问 http://localhost:3030"
+Write-Host "部署完成：请访问 http://localhost:8080"

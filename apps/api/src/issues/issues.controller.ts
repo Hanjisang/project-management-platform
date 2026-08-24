@@ -40,4 +40,16 @@ export class IssuesController {
   update(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: UpdateIssueDto) {
     return this.service.update(user, id, dto);
   }
+  @Post(':id/resolve')
+  @RequirePermissions(PERMISSIONS.ISSUE_EDIT)
+  @AuditAction('issue.resolve', 'Issue')
+  resolve(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.service.resolve(user, id);
+  }
+  @Post(':id/close')
+  @RequirePermissions(PERMISSIONS.ISSUE_CLOSE)
+  @AuditAction('issue.close', 'Issue')
+  close(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.service.close(user, id);
+  }
 }

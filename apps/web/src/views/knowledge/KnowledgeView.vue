@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import { PERMISSIONS } from '@pmp/shared-constants';
@@ -7,38 +7,83 @@ import { knowledgeApi } from '../../api/knowledge.api';
 import { useAuthStore } from '../../stores/auth';
 import PageHeader from '../../components/PageHeader.vue';
 import StatusTag from '../../components/StatusTag.vue';
+import ApiErrorView from '../../components/ApiErrorView.vue';
 import type { KnowledgeArticle } from '../../types/domain';
+import type { KnowledgeStatus } from '@pmp/shared-types';
 const auth = useAuthStore();
 const client = useQueryClient();
 const dialog = ref(false);
+const editingId = ref('');
 const drawer = ref(false);
 const selected = ref<KnowledgeArticle>();
-const filters = reactive({ search: '', categoryId: '', status: '' });
+const filters = reactive({ search: '', categoryId: '', status: '' as KnowledgeStatus | '' });
 const form = reactive({ categoryId: '', title: '', summary: '', content: '', tags: '' });
 const categories = useQuery({
   queryKey: ['knowledge-categories'],
   queryFn: knowledgeApi.categories,
 });
 const query = useQuery({
-  queryKey: ['knowledge', filters],
+  queryKey: computed(() => ['knowledge', { ...filters }]),
   queryFn: () => knowledgeApi.list(filters),
 });
 const create = useMutation({
   mutationFn: () =>
-    knowledgeApi.create({
-      ...form,
-      tags: form.tags
-        .split(/[,，]/)
-        .map((item) => item.trim())
-        .filter(Boolean),
-    }),
+    editingId.value
+      ? knowledgeApi.update(editingId.value, {
+          ...form,
+          tags: form.tags
+            .split(/[,，]/)
+            .map((item) => item.trim())
+            .filter(Boolean),
+        })
+      : knowledgeApi.create({
+          ...form,
+          tags: form.tags
+            .split(/[,，]/)
+            .map((item) => item.trim())
+            .filter(Boolean),
+        }),
   onSuccess: async () => {
-    ElMessage.success('知识草稿已保存');
+    ElMessage.success(editingId.value ? '知识草稿已更新' : '知识草稿已保存');
     dialog.value = false;
+    editingId.value = '';
+    Object.assign(form, { categoryId: '', title: '', summary: '', content: '', tags: '' });
     await client.invalidateQueries({ queryKey: ['knowledge'] });
   },
   onError: (error: Error) => ElMessage.error(error.message),
 });
+function openCreate(): void {
+  editingId.value = '';
+  Object.assign(form, { categoryId: '', title: '', summary: '', content: '', tags: '' });
+  dialog.value = true;
+}
+function edit(item: KnowledgeArticle): void {
+  editingId.value = item.id;
+  Object.assign(form, {
+    categoryId: item.category.id,
+    title: item.title,
+    summary: item.summary ?? '',
+    content: item.content,
+    tags: item.tags?.join(', ') ?? '',
+  });
+  dialog.value = true;
+}
+async function remove(id: string): Promise<void> {
+  await ElMessageBox.confirm('确定删除该知识文章？', '删除知识', { type: 'warning' });
+  await knowledgeApi.remove(id);
+  drawer.value = false;
+  await client.invalidateQueries({ queryKey: ['knowledge'] });
+}
+async function createCategory(): Promise<void> {
+  const { value } = await ElMessageBox.prompt('分类名称', '新增知识分类');
+  await knowledgeApi.createCategory(value);
+  await client.invalidateQueries({ queryKey: ['knowledge-categories'] });
+}
+async function removeAttachment(id: string): Promise<void> {
+  await ElMessageBox.confirm('确定删除附件？', '删除附件', { type: 'warning' });
+  await knowledgeApi.removeAttachment(id);
+  if (selected.value) selected.value = await knowledgeApi.get(selected.value.id);
+}
 function open(item: KnowledgeArticle): void {
   selected.value = item;
   drawer.value = true;
@@ -74,7 +119,11 @@ async function uploadAttachment(file: UploadFile): Promise<void> {
 <template>
   <div>
     <PageHeader title="知识库" description="已审核项目文档可沉淀为草稿，审核发布后供团队复用"
-      ><el-button type="primary" @click="dialog = true">创建知识</el-button></PageHeader
+      ><el-button v-if="auth.has(PERMISSIONS.KNOWLEDGE_CREATE)" @click="createCategory"
+        >新增分类</el-button
+      ><el-button v-if="auth.has(PERMISSIONS.KNOWLEDGE_CREATE)" type="primary" @click="openCreate"
+        >创建知识</el-button
+      ></PageHeader
     >
     <div class="filters">
       <div class="filter-row">
@@ -98,7 +147,13 @@ async function uploadAttachment(file: UploadFile): Promise<void> {
         /></el-select>
       </div>
     </div>
-    <div class="content-grid">
+    <ApiErrorView
+      v-if="query.isError.value"
+      :error="query.error.value"
+      title="知识文章加载失败"
+      @retry="query.refetch()"
+    />
+    <div v-else class="content-grid">
       <article
         v-for="item in query.data.value ?? []"
         :key="item.id"
@@ -124,9 +179,12 @@ async function uploadAttachment(file: UploadFile): Promise<void> {
         </div>
       </article>
     </div>
-    <el-empty v-if="!query.data.value?.length" description="暂无知识文章" /><el-dialog
+    <el-empty
+      v-if="!query.isError.value && !query.data.value?.length"
+      description="暂无知识文章"
+    /><el-dialog
       v-model="dialog"
-      title="创建知识草稿"
+      :title="editingId ? '编辑知识草稿' : '创建知识草稿'"
       width="min(720px,94vw)"
       ><el-form label-position="top"
         ><el-form-item label="分类" required
@@ -157,10 +215,26 @@ async function uploadAttachment(file: UploadFile): Promise<void> {
       ><template v-if="selected"
         ><div class="toolbar-actions" style="margin-bottom: 16px">
           <StatusTag :value="selected.status" /><el-button
-            v-if="['DRAFT', 'REJECTED'].includes(selected.status)"
+            v-if="
+              ['DRAFT', 'REJECTED'].includes(selected.status) &&
+              auth.has(PERMISSIONS.KNOWLEDGE_CREATE)
+            "
             type="primary"
             @click="submit(selected.id)"
             >提交审核</el-button
+          ><el-button
+            v-if="
+              ['DRAFT', 'REJECTED'].includes(selected.status) &&
+              auth.has(PERMISSIONS.KNOWLEDGE_CREATE)
+            "
+            @click="edit(selected)"
+            >编辑</el-button
+          ><el-button
+            v-if="auth.has(PERMISSIONS.KNOWLEDGE_CREATE)"
+            type="danger"
+            plain
+            @click="remove(selected.id)"
+            >删除</el-button
           ><el-upload
             v-if="
               ['DRAFT', 'REJECTED'].includes(selected.status) &&
@@ -188,7 +262,14 @@ async function uploadAttachment(file: UploadFile): Promise<void> {
             :key="attachment.id"
             style="padding: 8px 0; border-top: 1px solid var(--border)"
           >
-            <a :href="knowledgeApi.attachmentUrl(attachment.id)">{{ attachment.fileName }}</a>
+            <a :href="knowledgeApi.attachmentUrl(attachment.id)">{{ attachment.fileName }}</a
+            ><el-button
+              v-if="auth.has(PERMISSIONS.KNOWLEDGE_CREATE)"
+              text
+              type="danger"
+              @click="removeAttachment(attachment.id)"
+              >删除</el-button
+            >
           </div>
         </section></template
       ></el-drawer

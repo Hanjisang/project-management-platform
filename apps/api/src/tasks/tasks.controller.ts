@@ -40,6 +40,12 @@ export class TasksController {
   update(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() dto: UpdateTaskDto) {
     return this.service.update(user, id, dto);
   }
+  @Post(':id/complete')
+  @RequirePermissions(PERMISSIONS.TASK_COMPLETE)
+  @AuditAction('task.complete', 'Task')
+  complete(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.service.complete(user, id);
+  }
   @Delete(':id')
   @RequirePermissions(PERMISSIONS.TASK_EDIT)
   @AuditAction('task.delete', 'Task')

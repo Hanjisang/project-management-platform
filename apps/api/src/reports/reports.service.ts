@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { businessDayEndInstant, businessDayStartInstant } from '@pmp/shared-utils';
 import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -80,14 +81,20 @@ export class ReportsService {
       this.prisma.task.findMany({
         where: {
           projectId: { in: ids },
-          updatedAt: { gte: dto.weekStart, lte: this.endOfDay(dto.weekEnd) },
+          updatedAt: {
+            gte: businessDayStartInstant(dto.weekStart),
+            lte: businessDayEndInstant(dto.weekEnd),
+          },
         },
         select: { projectId: true, title: true, status: true, progress: true },
       }),
       this.prisma.issue.findMany({
         where: {
           projectId: { in: ids },
-          updatedAt: { gte: dto.weekStart, lte: this.endOfDay(dto.weekEnd) },
+          updatedAt: {
+            gte: businessDayStartInstant(dto.weekStart),
+            lte: businessDayEndInstant(dto.weekEnd),
+          },
         },
         select: { projectId: true, title: true, type: true, severity: true, status: true },
       }),
@@ -104,7 +111,10 @@ export class ReportsService {
       this.prisma.message.count({
         where: {
           projectId: { in: ids },
-          receivedAt: { gte: dto.weekStart, lte: this.endOfDay(dto.weekEnd) },
+          receivedAt: {
+            gte: businessDayStartInstant(dto.weekStart),
+            lte: businessDayEndInstant(dto.weekEnd),
+          },
         },
       }),
     ]);
@@ -138,10 +148,5 @@ export class ReportsService {
       },
       orderBy: { createdAt: 'desc' },
     });
-  }
-  private endOfDay(date: Date): Date {
-    const result = new Date(date);
-    result.setUTCHours(23, 59, 59, 999);
-    return result;
   }
 }

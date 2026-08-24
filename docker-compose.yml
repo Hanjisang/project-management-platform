@@ -30,7 +30,7 @@ services:
       mysql:
         condition: service_healthy
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: 3000
       DATABASE_URL: mysql://pmp:${MYSQL_PASSWORD}@mysql:3306/pmp
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
@@ -47,7 +47,8 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-https://api.openai.com/v1}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-gpt-5-mini}
-      AI_FAKE_ENABLED: 'false'
+      # Production remains disabled by default; isolated acceptance environments may opt in.
+      AI_FAKE_ENABLED: ${AI_FAKE_ENABLED:-false}
       DINGTALK_APP_KEY: ${DINGTALK_APP_KEY:-}
       DINGTALK_APP_SECRET: ${DINGTALK_APP_SECRET:-}
       DINGTALK_SIGNING_SECRET: ${DINGTALK_SIGNING_SECRET:-}

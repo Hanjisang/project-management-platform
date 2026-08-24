@@ -10,6 +10,7 @@ import { stableJson } from '@pmp/shared-utils';
 import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertProjectWritable } from '../projects/project-mutation';
 import type { CompleteChecklistDto, GeneratePlanDto, SyncPlanDto, UpdatePlanTaskDto } from './dto';
 import { buildPlanDiff } from './plan-diff';
 import { ProgressService } from './progress.service';
@@ -111,6 +112,7 @@ export class ProjectPlansService {
       };
     });
     await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, projectId);
       await tx.projectPlan.create({
         data: {
           projectId,
@@ -148,7 +150,10 @@ export class ProjectPlansService {
           message: '负责人必须是项目成员',
         });
     }
-    return this.prisma.projectPlanTask.update({ where: { id }, data: dto });
+    return this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, task.stage.plan.projectId);
+      return tx.projectPlanTask.update({ where: { id }, data: dto });
+    });
   }
 
   async completeChecklist(user: RequestUser, id: string, dto: CompleteChecklistDto) {
@@ -160,6 +165,7 @@ export class ProjectPlansService {
       throw new NotFoundException({ code: 'CHECKLIST_ITEM_NOT_FOUND', message: '检查项不存在' });
     await this.scope.assert(user, item.task.stage.plan.projectId);
     await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, item.task.stage.plan.projectId);
       await tx.projectChecklistItem.update({
         where: { id },
         data: {
@@ -211,6 +217,7 @@ export class ProjectPlansService {
 
   private async applySync(plan: PlanTree, version: VersionTree): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, plan.projectId);
       for (const [index, stage] of plan.stages.entries()) {
         await tx.projectPlanStage.update({
           where: { id: stage.id },

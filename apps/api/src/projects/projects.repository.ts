@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, type ProjectStatus, type ProjectHealth, type ProjectRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { lockProject } from './project-mutation';
+import { assertProjectWritable, lockProject } from './project-mutation';
 
 type ClosureBlockers = Awaited<ReturnType<ProjectsRepository['closureBlockers']>>;
 type CloseResult =
@@ -104,11 +104,7 @@ export class ProjectsRepository {
     members: Array<{ userId: string; projectRole: ProjectRole }>,
   ) {
     return this.prisma.$transaction(async (tx) => {
-      const project = await tx.project.findUnique({
-        where: { id: projectId },
-        select: { id: true },
-      });
-      if (!project) return null;
+      await assertProjectWritable(tx, projectId);
       const userIds = [...new Set(members.map((member) => member.userId).concat(managerUserId))];
       const activeCount = await tx.user.count({
         where: { id: { in: userIds }, status: 'ACTIVE', deletedAt: null },
@@ -216,11 +212,24 @@ export class ProjectsRepository {
   prismaClient() {
     return this.prisma;
   }
-  activeUserOptions() {
-    return this.prisma.user.findMany({
-      where: { status: 'ACTIVE', deletedAt: null },
-      select: { id: true, username: true, displayName: true },
-      orderBy: { displayName: 'asc' },
-    });
+  async activeUserOptions(search: string | undefined, page: number, pageSize: number) {
+    const where: Prisma.UserWhereInput = {
+      status: 'ACTIVE',
+      deletedAt: null,
+      ...(search
+        ? { OR: [{ username: { contains: search } }, { displayName: { contains: search } }] }
+        : {}),
+    };
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        where,
+        select: { id: true, username: true, displayName: true },
+        orderBy: { displayName: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+    return { items, page, pageSize, total };
   }
 }

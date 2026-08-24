@@ -63,6 +63,56 @@ export function deriveProjectHealth(input: {
     return 'WARNING';
   return 'NORMAL';
 }
+
+export const DEFAULT_BUSINESS_TIME_ZONE = 'Asia/Shanghai';
+
+/** Returns the current business day as a UTC-midnight Date suitable for Prisma DATE columns. */
+export function businessToday(now = new Date(), timeZone = DEFAULT_BUSINESS_TIME_ZONE): Date {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(Date.UTC(Number(value.year), Number(value.month) - 1, Number(value.day)));
+}
+
+export function addBusinessDays(date: Date, days: number): Date {
+  const value = new Date(date);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value;
+}
+
+/** Converts a date-only value to the UTC instant at which that business day starts. */
+export function businessDayStartInstant(date: Date, timeZone = DEFAULT_BUSINESS_TIME_ZONE): Date {
+  const target = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  const candidate = new Date(target);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(candidate);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const rendered = Date.UTC(
+    Number(value.year),
+    Number(value.month) - 1,
+    Number(value.day),
+    Number(value.hour),
+    Number(value.minute),
+    Number(value.second),
+  );
+  return new Date(target + (target - rendered));
+}
+
+export function businessDayEndInstant(date: Date, timeZone = DEFAULT_BUSINESS_TIME_ZONE): Date {
+  return new Date(businessDayStartInstant(addBusinessDays(date, 1), timeZone).getTime() - 1);
+}
 export function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;

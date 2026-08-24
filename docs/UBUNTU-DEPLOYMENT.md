@@ -21,7 +21,7 @@
 Docker 数据默认保存在 Docker 管理的命名卷中：
 
 - `mysql_data`：MySQL 数据目录。
-- `app_uploads`：应用上传文件目录，对应容器内 `/app/data/uploads`。
+- `app_storage`：应用上传文件目录，对应容器内 `/app/storage`。
 
 不要直接修改 `/var/lib/docker/volumes` 下的内容。备份和恢复应通过 MySQL 导出及临时容器读取命名卷完成。
 
@@ -60,14 +60,14 @@ sudo mkdir -p /opt/project-management-platform
 sudo chown "$USER":"$USER" /opt/project-management-platform
 
 git clone \
-  --branch fix/round1-technical-audit \
+  --branch main \
   https://github.com/Hanjisang/project-management-platform.git \
   /opt/project-management-platform
 
 cd /opt/project-management-platform
 ```
 
-当前审计代码位于 `fix/round1-technical-audit` 分支。在 Pull Request 合并到 `main` 后，生产环境应改为部署 `main` 或正式版本标签，不应长期固定在功能分支。
+生产环境应部署已验收的 `main` commit 或正式版本标签，不应直接部署未验收功能分支。
 
 ## 4. 配置生产环境变量
 
@@ -82,8 +82,8 @@ nano .env.deploy
 
 - `MYSQL_ROOT_PASSWORD`
 - `MYSQL_PASSWORD`
-- `JWT_SECRET`（至少 32 个随机字符）
-- `DEFAULT_ADMIN_PASSWORD`
+- `JWT_ACCESS_SECRET` 与 `JWT_REFRESH_SECRET`（分别至少 32 个随机字符）
+- `ADMIN_PASSWORD`
 
 可用以下命令生成随机密钥：
 
@@ -103,20 +103,18 @@ sudo docker compose --env-file .env.deploy up -d --build
 容器启动顺序：
 
 1. MySQL 启动并通过 healthcheck。
-2. 应用执行 `scripts/migrate-round1-technical-audit.js`。
-3. 应用执行 `scripts/ensure-admin.js`。
-4. 应用启动 `server.js`，监听容器端口 3030。
+2. API 容器执行 `prisma migrate deploy`。
+3. API 容器执行幂等 `db:seed`，再启动 `apps/api/dist/main.js`。
+4. Web 容器由 Nginx 提供静态资源并反向代理 `/api`。
 
 查看状态与日志：
 
 ```bash
 sudo docker compose --env-file .env.deploy ps
-sudo docker compose --env-file .env.deploy logs --tail=200 app
+sudo docker compose --env-file .env.deploy logs --tail=200 api web
 sudo docker compose --env-file .env.deploy logs --tail=200 mysql
-curl -fsS http://127.0.0.1:3030/api/health
+curl -fsS http://127.0.0.1:8080/health
 ```
-
-如果迁移版本缺失，应用会明确提示执行 `npm run db:migrate-round1`；Dockerfile 的正式启动命令已经在启动服务前自动执行该迁移。
 
 ## 6. 配置 Nginx 反向代理
 
@@ -130,7 +128,7 @@ server {
     client_max_body_size 50m;
 
     location / {
-        proxy_pass http://127.0.0.1:3030;
+        proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -168,20 +166,20 @@ sudo ufw enable
 sudo ufw status
 ```
 
-不建议把 MySQL 3306 暴露到公网。应用端口 3030 也应仅监听本机或通过云安全组限制，只由 Nginx 对外提供服务。
+不建议把 MySQL 3306 暴露到公网。Web 端口 8080 也应仅监听本机或通过云安全组限制，只由宿主机 Nginx 对外提供服务。
 
 ## 8. 日常更新
 
 ```bash
 cd /opt/project-management-platform
 git fetch origin
-git pull --ff-only origin fix/round1-technical-audit
+git pull --ff-only origin main
 sudo docker compose --env-file .env.deploy up -d --build
 sudo docker compose --env-file .env.deploy ps
-curl -fsS http://127.0.0.1:3030/api/health
+curl -fsS http://127.0.0.1:8080/health
 ```
 
-合并到 `main` 后，将更新命令中的分支替换为 `main`。生产部署前应查看变更说明和数据库迁移说明，并先完成备份。
+生产部署前应查看变更说明和数据库迁移说明，并先完成备份。
 
 ## 9. 备份
 
@@ -202,7 +200,7 @@ set +a
 
 sudo docker compose --env-file .env.deploy exec -T mysql \
   mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" \
-  --single-transaction --routines --triggers pis_delivery \
+  --single-transaction --routines --triggers pmp \
   | gzip > "/srv/backups/project-management-platform/mysql-$(date +%F-%H%M%S).sql.gz"
 ```
 
@@ -210,7 +208,7 @@ sudo docker compose --env-file .env.deploy exec -T mysql \
 
 ```bash
 sudo docker run --rm \
-  -v project-management-platform_app_uploads:/source:ro \
+  -v pmp-v2_app_storage:/source:ro \
   -v /srv/backups/project-management-platform:/backup \
   alpine sh -c 'tar -czf /backup/uploads-$(date +%F-%H%M%S).tar.gz -C /source .'
 ```
@@ -235,7 +233,7 @@ sudo docker compose --env-file .env.deploy up -d --build
 ```bash
 cd /opt/project-management-platform
 sudo docker compose --env-file .env.deploy ps
-sudo docker compose --env-file .env.deploy logs --tail=300 app
+sudo docker compose --env-file .env.deploy logs --tail=300 api web
 sudo docker compose --env-file .env.deploy logs --tail=300 mysql
 sudo nginx -t
 sudo journalctl -u nginx --since "30 minutes ago"
@@ -248,8 +246,8 @@ free -h
 - MySQL healthcheck 失败：检查 `.env.deploy` 密码、磁盘空间和 MySQL 日志。
 - 提示缺少迁移：检查应用日志中的迁移错误，确认数据库账号具有所需 DDL 权限。
 - 登录后 Cookie 无效：确认 HTTPS、反向代理头和 `COOKIE_SECURE` 配置一致。
-- 上传失败：检查 `app_uploads` 卷、磁盘空间和容器目录权限。
-- 502：确认应用容器健康、3030 端口映射和 Nginx `proxy_pass`。
+- 上传失败：检查 `app_storage` 卷、磁盘空间和容器目录权限。
+- 502：确认 API/Web 容器健康、8080 端口映射和 Nginx `proxy_pass`。
 
 ## 12. 发布验收清单
 
@@ -257,7 +255,7 @@ free -h
 - [ ] `.env.deploy` 权限为 600，且未进入 Git。
 - [ ] MySQL 未暴露公网。
 - [ ] 迁移成功，应用启动无 schema 版本错误。
-- [ ] `/api/health` 返回成功。
+- [ ] `/health` 返回成功。
 - [ ] 管理员可登录并立即修改初始密码。
 - [ ] 普通用户无法访问其他项目数据。
 - [ ] 文档上传、下载及删除补偿流程已验证。

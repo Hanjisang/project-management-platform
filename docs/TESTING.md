@@ -17,4 +17,6 @@ npm run test:integration
 npm run test:e2e
 ```
 
-2026-08-23 验收基线的实际结果为 34 项单元、15 项集成和 11 项 E2E，均 0 skipped / 0 failed。完整门禁还包括 `npm run format:check`、`npm run lint`、`npm run typecheck`、`npm run build` 和 `npm audit --audit-level=high`。
+2026-08-24 RC hardening 的实际结果为 51 项单元、20 项集成和 11 项 E2E，均 0 skipped / 0 failed。完整门禁还包括 `npm run format:check`、`npm run lint`、`npm run typecheck`、`npm run build` 和 `npm audit --audit-level=high`。
+
+Playwright 也可复用已经启动的 Docker Web，不再额外启动 Vite/Nest 开发服务器：设置 `E2E_BASE_URL=http://127.0.0.1:8080` 和 `E2E_USE_EXISTING_SERVER=true` 后运行测试。A–G 清理逻辑还需要让 `DATABASE_URL` 指向同一隔离 MySQL；Fake AI 只能在 `NODE_ENV=test` 且显式设置 `AI_FAKE_ENABLED=true` 时启用，production 默认与最终验收状态均为关闭。

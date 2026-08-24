@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import { keepPreviousData, useQuery } from '@tanstack/vue-query';
 import PageHeader from '../../components/PageHeader.vue';
+import ApiErrorView from '../../components/ApiErrorView.vue';
 import { systemApi } from '../../api/system.api';
 
 const page = ref(1);
@@ -20,7 +21,13 @@ const formatTime = (value: string) =>
 <template>
   <div>
     <PageHeader title="审计日志" description="记录关键写操作、操作者、资源与请求标识，便于追溯" />
-    <div class="panel table-wrap">
+    <ApiErrorView
+      v-if="query.isError.value"
+      :error="query.error.value"
+      title="审计日志加载失败"
+      @retry="query.refetch()"
+    />
+    <div v-else class="panel table-wrap">
       <el-table v-loading="query.isLoading.value" :data="query.data.value?.items ?? []">
         <el-table-column label="时间" min-width="170"
           ><template #default="scope">{{

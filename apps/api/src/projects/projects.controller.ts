@@ -15,6 +15,7 @@ import { PERMISSIONS } from '@pmp/shared-constants';
 import {
   AuditAction,
   CurrentUser,
+  RequireAnyPermission,
   RequirePermissions,
   RequireProjectAccess,
 } from '../common/decorators';
@@ -22,6 +23,7 @@ import type { RequestUser } from '../common/types';
 import {
   CreateProjectDto,
   ProjectListQueryDto,
+  ProjectUserOptionsQueryDto,
   SetProjectMembersDto,
   UpdateProjectDto,
 } from './dto';
@@ -119,7 +121,9 @@ export class ProjectsController {
 @Controller('project-user-options')
 export class ProjectUserOptionsController {
   constructor(private readonly service: ProjectsService) {}
-  @Get() @RequirePermissions(PERMISSIONS.PROJECT_CREATE) list() {
-    return this.service.userOptions();
+  @Get()
+  @RequireAnyPermission(PERMISSIONS.PROJECT_CREATE, PERMISSIONS.PROJECT_MEMBER_MANAGE)
+  list(@Query() query: ProjectUserOptionsQueryDto) {
+    return this.service.userOptions(query);
   }
 }

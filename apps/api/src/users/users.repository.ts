@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -24,6 +25,12 @@ export class UsersRepository {
     return this.prisma.role.findMany({
       where: { code: { in: codes } },
       select: { id: true, code: true },
+    });
+  }
+  findForAdministratorProtection(id: string) {
+    return this.prisma.user.findUnique({
+      where: { id },
+      select: { status: true, roles: { select: { role: { select: { code: true } } } } },
     });
   }
   create(data: {
@@ -59,8 +66,24 @@ export class UsersRepository {
       status?: 'ACTIVE' | 'DISABLED' | 'LOCKED' | 'DEPARTED';
       roleIds?: string[];
     },
+    protectLastAdministrator = false,
   ) {
     return this.prisma.$transaction(async (tx) => {
+      if (protectLastAdministrator) {
+        const activeAdministrators = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT u.id
+          FROM users u
+          INNER JOIN user_roles ur ON ur.user_id = u.id
+          INNER JOIN roles r ON r.id = ur.role_id
+          WHERE r.code = 'ADMINISTRATOR' AND u.status = 'ACTIVE' AND u.deleted_at IS NULL
+          FOR UPDATE
+        `);
+        if (activeAdministrators.length <= 1)
+          throw new BadRequestException({
+            code: 'LAST_ADMINISTRATOR_REQUIRED',
+            message: '系统必须保留至少一个启用的管理员',
+          });
+      }
       if (data.roleIds) {
         await tx.userRole.deleteMany({ where: { userId: id } });
         await tx.userRole.createMany({

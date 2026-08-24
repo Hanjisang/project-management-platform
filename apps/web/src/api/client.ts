@@ -4,12 +4,14 @@ import type { ApiFailure, ApiSuccess } from '@pmp/shared-types';
 interface RetryConfig extends InternalAxiosRequestConfig {
   _retried?: boolean;
 }
+let refreshPromise: Promise<void> | null = null;
 export class ApiError extends Error {
   constructor(
     public readonly code: string,
     message: string,
     public readonly requestId?: string,
     public readonly details?: unknown,
+    public readonly status?: number,
   ) {
     super(message);
   }
@@ -38,6 +40,28 @@ function cookie(name: string): string | undefined {
     .slice(1)
     .join('=');
 }
+export function refreshSession(): Promise<void> {
+  if (refreshPromise) return refreshPromise;
+  const csrfToken = cookie('csrf_token');
+  refreshPromise = axios
+    .post(
+      '/api/v2/auth/refresh',
+      {},
+      {
+        withCredentials: true,
+        headers: csrfToken ? { 'x-csrf-token': decodeURIComponent(csrfToken) } : undefined,
+      },
+    )
+    .then(() => undefined)
+    .catch((error: unknown) => {
+      window.dispatchEvent(new Event('auth:expired'));
+      throw error;
+    })
+    .finally(() => {
+      refreshPromise = null;
+    });
+  return refreshPromise;
+}
 api.interceptors.request.use((config) => {
   config.params = compactParams(config.params);
   if (!['get', 'head', 'options'].includes(config.method?.toLowerCase() ?? 'get')) {
@@ -61,18 +85,10 @@ api.interceptors.response.use(
     ) {
       config._retried = true;
       try {
-        const csrfToken = cookie('csrf_token');
-        await axios.post(
-          '/api/v2/auth/refresh',
-          {},
-          {
-            withCredentials: true,
-            headers: csrfToken ? { 'x-csrf-token': decodeURIComponent(csrfToken) } : undefined,
-          },
-        );
+        await refreshSession();
         return api.request(config);
       } catch {
-        window.dispatchEvent(new Event('auth:expired'));
+        // refreshSession owns the single expiration event for all concurrent waiters.
       }
     }
     const body = error.response?.data;
@@ -81,6 +97,7 @@ api.interceptors.response.use(
       body?.message ?? '网络请求失败',
       body?.requestId,
       body?.details,
+      error.response?.status,
     );
   },
 );

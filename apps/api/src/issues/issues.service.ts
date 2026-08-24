@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { calculateRiskScore } from '@pmp/shared-utils';
 import type { RequestUser } from '../common/types';
@@ -79,22 +84,51 @@ export class IssuesService {
   async update(user: RequestUser, id: string, dto: UpdateIssueDto) {
     const existing = await this.get(user, id);
     await this.validateOwner(existing.projectId, dto.ownerUserId);
+    if (dto.status && ['RESOLVED', 'CLOSED'].includes(dto.status))
+      throw new BadRequestException({
+        code: 'ISSUE_STATUS_ACTION_REQUIRED',
+        message: '请使用解决或关闭操作更新问题状态',
+      });
     const probability = dto.probability ?? existing.probability;
     const impact = dto.impact ?? existing.impact;
     const riskScore =
       probability && impact ? calculateRiskScore(probability, impact) : existing.riskScore;
-    const resolved = dto.status
-      ? ['RESOLVED', 'CLOSED'].includes(dto.status)
-      : ['RESOLVED', 'CLOSED'].includes(existing.status);
-    const issue = await this.prisma.issue.update({
-      where: { id },
-      data: {
-        ...dto,
-        riskScore,
-        resolvedAt: resolved ? (existing.resolvedAt ?? new Date()) : null,
-      },
+    const issue = await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, existing.projectId);
+      return tx.issue.update({
+        where: { id },
+        data: {
+          ...dto,
+          riskScore,
+          resolvedAt: dto.status ? null : undefined,
+        },
+      });
     });
     await this.projects.recomputeHealth(existing.projectId);
+    return issue;
+  }
+  async resolve(user: RequestUser, id: string) {
+    const existing = await this.get(user, id);
+    if (!['OPEN', 'PROCESSING', 'WAITING'].includes(existing.status))
+      throw this.invalidTransition(existing.status, 'RESOLVED');
+    return this.changeStatus(existing.projectId, id, 'RESOLVED', existing.resolvedAt ?? new Date());
+  }
+  async close(user: RequestUser, id: string) {
+    const existing = await this.get(user, id);
+    if (existing.status !== 'RESOLVED') throw this.invalidTransition(existing.status, 'CLOSED');
+    return this.changeStatus(existing.projectId, id, 'CLOSED', existing.resolvedAt ?? new Date());
+  }
+  private async changeStatus(
+    projectId: string,
+    id: string,
+    status: 'RESOLVED' | 'CLOSED',
+    resolvedAt: Date,
+  ) {
+    const issue = await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, projectId);
+      return tx.issue.update({ where: { id }, data: { status, resolvedAt } });
+    });
+    await this.projects.recomputeHealth(projectId);
     return issue;
   }
   private async validateOwner(projectId: string, ownerUserId?: string) {
@@ -110,5 +144,12 @@ export class IssuesService {
   }
   private notFound() {
     return new NotFoundException({ code: 'ISSUE_NOT_FOUND', message: '问题或风险不存在' });
+  }
+  private invalidTransition(from: string, to: string) {
+    return new ConflictException({
+      code: 'ISSUE_STATUS_TRANSITION_INVALID',
+      message: '问题状态不允许此操作',
+      details: { from, to },
+    });
   }
 }

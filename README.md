@@ -55,8 +55,8 @@ npm run build
 
 根目录 `npm test` 运行全部非数据库 Vitest 测试。真实 MySQL 集成测试需提供 `TEST_DATABASE_URL`；完整说明见 [docs/TESTING.md](docs/TESTING.md)。
 
-V1 单体源码保留在 Git 历史及当前根目录作为迁移核对材料，但 V2 的脚本、容器和 CI 不再启动 `server.js` 或根目录 `index.html`。详细文档见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/MIGRATION.md](docs/MIGRATION.md)。
+仓库运行入口只有 `apps/api` 与 `apps/web`；V1 单体源码已从工作树移除，历史实现仅通过 Git tag/commit 查阅。详细文档见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/MIGRATION.md](docs/MIGRATION.md)。
 
 ## Production Acceptance
 
-2026-08-23 已在两个全新 MySQL 8.4 数据库上完成 migration、seed 和应用启动复验，并通过 34 项单元测试、15 项真实 MySQL 集成测试、11 项 Playwright E2E（包含业务 A–G 和权限隔离）及实际 Docker Compose 部署验证。详见 [docs/V2-PRODUCTION-ACCEPTANCE.md](docs/V2-PRODUCTION-ACCEPTANCE.md)。
+2026-08-24 RC hardening 已在全新 MySQL 8.4 数据库上重新完成 migration、seed，并通过 51 项单元测试、20 项真实 MySQL 集成测试和 11 项 Playwright E2E（包含业务 A–G、权限隔离及三种响应式布局）。候选代码的 Docker Compose 镜像已无缓存重建并从空卷启动，MySQL、API、Web 均 healthy，Docker Web 环境业务 E2E 11/11 通过。Element Plus 改为按需加载后，最大 JavaScript chunk 从 894.28 kB 降至 143.77 kB。详见 [docs/V2-PRODUCTION-ACCEPTANCE.md](docs/V2-PRODUCTION-ACCEPTANCE.md)。

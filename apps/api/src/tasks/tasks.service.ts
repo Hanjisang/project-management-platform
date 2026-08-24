@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ProjectsService } from '../projects/projects.service';
 import { assertProjectWritable } from '../projects/project-mutation';
 import type { CreateTaskDto, TaskListQueryDto, UpdateTaskDto } from './dto';
+import { assertTaskDates, normalizeTaskUpdate } from './task-state';
 
 @Injectable()
 export class TasksService {
@@ -69,6 +70,7 @@ export class TasksService {
   async create(user: RequestUser, dto: CreateTaskDto) {
     await this.scope.assert(user, dto.projectId);
     await this.validateReferences(dto.projectId, dto.ownerUserId, dto.planTaskId);
+    assertTaskDates(dto.plannedStartDate, dto.dueDate);
     const task = await this.prisma.$transaction(async (tx) => {
       await assertProjectWritable(tx, dto.projectId);
       return tx.task.create({
@@ -87,22 +89,20 @@ export class TasksService {
   async update(user: RequestUser, id: string, dto: UpdateTaskDto) {
     const existing = await this.get(user, id);
     await this.validateReferences(existing.projectId, dto.ownerUserId, undefined);
-    if (dto.plannedStartDate && dto.dueDate && dto.plannedStartDate > dto.dueDate)
-      throw new BadRequestException({
-        code: 'TASK_DATE_INVALID',
-        message: '计划开始日期不能晚于截止日期',
+    assertTaskDates(
+      dto.plannedStartDate ?? existing.plannedStartDate ?? undefined,
+      dto.dueDate ?? existing.dueDate ?? undefined,
+    );
+    const normalized = normalizeTaskUpdate(existing, dto);
+    const task = await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, existing.projectId);
+      return tx.task.update({
+        where: { id },
+        data: {
+          ...dto,
+          ...normalized,
+        },
       });
-    const status = dto.status ?? (dto.progress === 100 ? 'DONE' : undefined);
-    const progress = status === 'DONE' ? 100 : dto.progress;
-    const task = await this.prisma.task.update({
-      where: { id },
-      data: {
-        ...dto,
-        status,
-        progress,
-        completedAt:
-          status === 'DONE' ? (existing.completedAt ?? new Date()) : status ? null : undefined,
-      },
     });
     await this.projects.recomputeHealth(existing.projectId);
     return task;
@@ -114,8 +114,29 @@ export class TasksService {
         code: 'COMPLETED_TASK_DELETE_FORBIDDEN',
         message: '已完成任务不能直接删除，可改为取消',
       });
-    await this.prisma.task.delete({ where: { id } });
+    await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, task.projectId);
+      await tx.task.delete({ where: { id } });
+    });
     await this.projects.recomputeHealth(task.projectId);
+  }
+  async complete(user: RequestUser, id: string) {
+    const existing = await this.get(user, id);
+    if (existing.status === 'CANCELLED')
+      throw new ConflictException({
+        code: 'TASK_STATUS_TRANSITION_INVALID',
+        message: '已取消任务不能直接完成',
+        details: { from: existing.status, to: 'DONE' },
+      });
+    const task = await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, existing.projectId);
+      return tx.task.update({
+        where: { id },
+        data: { status: 'DONE', progress: 100, completedAt: existing.completedAt ?? new Date() },
+      });
+    });
+    await this.projects.recomputeHealth(existing.projectId);
+    return task;
   }
   private async validateReferences(projectId: string, ownerUserId?: string, planTaskId?: string) {
     if (ownerUserId) {
