@@ -9,8 +9,12 @@
 - `SopTask` 仅作为 SOP 定义；项目生成后实际执行统一落到 `ProjectWorkItem`，不恢复 `ProjectPlanTask + Task` 双事实源。
 - SOP Published 版本不可直接修改；项目持有独立计划快照，不实时读取后续 SOP 定义。
 - 项目可以在尚未生成正式 SOP 计划前创建人工临时任务。后续生成正式计划时，安全的临时 Plan 会被正式 SOP Plan 吸收，人工 WorkItem 原 ID/状态保留，项目仍只有一个 ProjectPlan。
-- 实施计划页恢复直接操作 Checklist、下载交付模板、上传首版/新版本交付物、人工通过/驳回；任务抽屉和任务中心仍读取同一 ProjectWorkItem / ProjectDeliverable / Document 数据，不建立第二套状态。
-- 普通项目文档与正式 Deliverable 文档继续共存：Deliverable 关联用于正式交付，普通文档不要求绑定 Deliverable。
+- Message Confirm 创建任务同样不依赖既有 SOP Plan：没有计划时自动建立“项目自定义执行计划 / 临时任务”，并通过既有 PendingAction 结果关联向 WorkItem API 暴露 `sourceType=MESSAGE` 与 `sourceId=messageId`，重复确认保持幂等。
+- 实施计划页恢复直接操作 Checklist、编辑同一 ProjectWorkItem 的负责人/计划起止日期、下载交付模板、上传首版/新版本交付物、人工通过/驳回；任务抽屉和任务中心仍读取同一 ProjectWorkItem / ProjectDeliverable / Document 数据，不建立第二套状态。
+- `PLAN_EDIT` 可用于计划页的负责人/计划日期与 Checklist 操作，但不能借此越权修改任务标题、说明、优先级、状态、进度或执行取消；完整任务编辑仍要求 `TASK_EDIT`。
+- 普通项目文档与正式 Deliverable 文档继续共存：Deliverable 关联用于正式交付，普通文档不要求绑定 Deliverable。普通文档设置 `required=true` 后成为项目结项必需资料，只有 `APPROVED` 才解除结项阻断；DRAFT / PENDING_REVIEW / REJECTED 均阻断结项。
+- 任务取消统一使用 `CANCELLED` 并保留执行历史，不提供物理删除语义；已完成任务不可通过取消入口删除。
+- Dashboard 保留新的“我的项目”执行工作台，同时恢复“正常项目”“待确认消息”“项目进度排行”等原有指标；高风险问题总数使用独立 count，不受最多展示 20 条列表的截断影响。
 - Dashboard、任务中心、项目执行、项目成员、问题风险、文档、消息、日报周报、知识库、用户/RBAC、集成配置、审计等原有产品入口继续保留。
 
 ## 2. Checklist / Deliverable 进度规则
@@ -48,17 +52,17 @@
 
 ## 6. 最终 CI 验收证据
 
-GitHub Actions V2 CI #122（代码 HEAD `b6f8110f1dafa97a01e224945841a190ecec5e15`）完整通过：
+GitHub Actions V2 CI #176（代码 HEAD `4554e10586f395381ca79bf1733a4c834877e911`）完整通过：
 
 - npm install / dependency audit：通过，0 vulnerabilities。
 - lint：通过。
 - typecheck：通过。
-- Unit：**100/100 passed**，26 个 test files，0 failed、0 skipped。
+- Unit：**104/104 passed**，28 个 test files，0 failed、0 skipped。
 - Fresh MySQL 8.4：发现并成功应用 **5/5 migrations**，随后 seed 成功。
-- Integration：**37/37 passed**，4 个 integration files，0 failed、0 skipped；包含临时人工 Plan → 正式 SOP Plan 吸收回归。
+- Integration：**39/39 passed**，5 个 integration files，0 failed、0 skipped；新增 Functional Parity 专项真实 MySQL 验证普通 required 文档结项 blocker、无 SOP Plan 的 Message → WorkItem 创建与幂等来源追溯。
 - build：API/Web/共享包全部通过。
 - Web 当前最大 JavaScript chunk：174.48 kB，gzip 67.27 kB。
-- Playwright：**11/11 passed**，覆盖核心生产业务流、安全场景，以及桌面/手机/横屏导航。
+- Playwright：**15/15 passed**，除原核心生产业务流/安全/响应式导航外，新增验证 Dashboard 旧指标并存、实施计划直接修改同一 WorkItem 日期、取消任务保留历史、普通 required 文档人工审核后解除结项阻断。
 - Container job：Docker Compose config、API image build、Web image build 全部通过。
 
 ## 7. 已知非阻断事项
