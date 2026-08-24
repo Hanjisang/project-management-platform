@@ -81,11 +81,14 @@ const metrics = [
           </div>
           <div class="table-wrap">
             <el-table :data="query.data.value.overdueTasks" empty-text="无逾期任务"
-              ><el-table-column prop="title" label="任务" min-width="180" /><el-table-column
+              ><el-table-column prop="name" label="任务" min-width="180" /><el-table-column
                 prop="project.name"
                 label="项目"
-                min-width="140" /><el-table-column prop="dueDate" label="截止日期" width="120"
-            /></el-table>
+                min-width="140" /><el-table-column label="截止日期" width="120"
+                ><template #default="scope">{{
+                  scope.row.plannedEndDate?.slice(0, 10) ?? '-'
+                }}</template></el-table-column
+            ></el-table>
           </div>
         </article>
         <article class="panel">
