@@ -38,6 +38,11 @@ export class DashboardService {
     const projectIds = projects.map((project) => project.id);
     const today = businessToday();
     const upcoming = addBusinessDays(today, 30);
+    const highRiskWhere = {
+      projectId: { in: projectIds },
+      severity: { in: ['HIGH', 'CRITICAL'] as const },
+      status: { notIn: ['RESOLVED', 'CLOSED'] as const },
+    };
 
     const [
       workItems,
@@ -45,6 +50,7 @@ export class DashboardService {
       requiredDeliverables,
       pendingChanges,
       highRiskIssues,
+      highRiskIssueCount,
       pendingMessages,
       taskLoads,
     ] = await Promise.all([
@@ -90,15 +96,12 @@ export class DashboardService {
         select: { projectId: true },
       }),
       this.prisma.issue.findMany({
-        where: {
-          projectId: { in: projectIds },
-          severity: { in: ['HIGH', 'CRITICAL'] },
-          status: { notIn: ['RESOLVED', 'CLOSED'] },
-        },
+        where: highRiskWhere,
         include: { project: { select: { id: true, name: true } } },
         orderBy: [{ riskScore: 'desc' }, { createdAt: 'desc' }],
         take: 20,
       }),
+      this.prisma.issue.count({ where: highRiskWhere }),
       this.prisma.message.count({
         where: { projectId: { in: projectIds }, status: 'PENDING_CONFIRMATION' },
       }),
@@ -115,20 +118,14 @@ export class DashboardService {
     ]);
 
     const activeWorkItems = workItems.filter((item) => item.status !== 'CANCELLED');
-    const overdueTasks = activeWorkItems
-      .filter(
-        (item) =>
-          item.plannedEndDate &&
-          item.plannedEndDate < today &&
-          !['DONE', 'CANCELLED'].includes(item.status),
-      )
-      .slice(0, 20);
-    const overdueTaskCount = overdueTasks.length + Math.max(0, activeWorkItems.filter(
+    const allOverdueTasks = activeWorkItems.filter(
       (item) =>
         item.plannedEndDate &&
         item.plannedEndDate < today &&
         !['DONE', 'CANCELLED'].includes(item.status),
-    ).length - overdueTasks.length);
+    );
+    const overdueTasks = allOverdueTasks.slice(0, 20);
+    const overdueTaskCount = allOverdueTasks.length;
     const pendingSopTaskCount = activeWorkItems.filter(
       (item) => item.sourceType === 'SOP' && item.status !== 'DONE',
     ).length;
@@ -232,7 +229,7 @@ export class DashboardService {
             item.plannedGoLiveDate <= upcoming,
         ).length,
         overdueTaskCount,
-        highRiskIssueCount: highRiskIssues.length,
+        highRiskIssueCount,
         pendingMessageCount: pendingMessages,
         pendingSopTaskCount,
         overdueChecklistCount,
