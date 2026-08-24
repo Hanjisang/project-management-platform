@@ -45,10 +45,37 @@ export class DeliverableReviewDecisionService {
         effectiveReview: null,
       };
     if (deliverable.needsRevision) return this.pending('NEEDS_REVISION', null);
-    const human = [...latestVersion.reviews]
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .find((review) => review.reviewType === 'HUMAN' && review.status !== 'PENDING');
-    return this.fromFinalReview(human, 'HUMAN_REVIEW_REQUIRED');
+
+    const reviews = [...latestVersion.reviews].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+    );
+    const human = reviews.find(
+      (review) => review.reviewType === 'HUMAN' && review.status !== 'PENDING',
+    );
+
+    // Production currently reserves AI integration only. Fake AI remains available in tests so
+    // the future provider contract continues to be verified without enabling production AI.
+    const fakeAiContractEnabled =
+      process.env.NODE_ENV === 'test' && process.env.AI_FAKE_ENABLED === 'true';
+    if (!fakeAiContractEnabled)
+      return this.fromFinalReview(human, 'HUMAN_REVIEW_REQUIRED');
+
+    const ai = reviews.find((review) => review.reviewType === 'AI' && review.status !== 'PENDING');
+    const aiPending = reviews.some(
+      (review) => review.reviewType === 'AI' && review.status === 'PENDING',
+    );
+    if (deliverable.reviewMode === 'HUMAN_ONLY')
+      return this.fromFinalReview(human, 'HUMAN_REVIEW_REQUIRED');
+    if (deliverable.reviewMode === 'AI_THEN_HUMAN_REQUIRED') {
+      if (human) return this.fromFinalReview(human, 'HUMAN_REVIEW_REQUIRED');
+      if (ai?.status === 'FAILED') return this.pending('AI_FAILED', ai);
+      return this.pending(aiPending ? 'AI_PENDING' : 'HUMAN_REVIEW_REQUIRED', ai ?? null);
+    }
+    if (human) return this.fromFinalReview(human, 'HUMAN_REVIEW_REQUIRED');
+    if (ai?.status === 'APPROVED') return this.approved(ai);
+    if (ai?.status === 'REJECTED') return this.pending('AI_REJECTED', ai);
+    if (ai?.status === 'FAILED') return this.pending('AI_FAILED', ai);
+    return this.pending('AI_PENDING', ai ?? null);
   }
 
   private fromFinalReview(
