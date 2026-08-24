@@ -302,11 +302,21 @@ test('G — Message analysis and human confirmation create real idempotent actio
   await card.getByRole('button', { name: 'AI 结构化分析' }).click();
   await expect(card.getByText('CREATE_TASK', { exact: true })).toBeVisible();
   while (await card.getByRole('button', { name: '确认', exact: true }).count()) {
-    await card.getByRole('button', { name: '确认', exact: true }).first().click();
+    const confirmButtons = card.getByRole('button', { name: '确认', exact: true });
+    const pendingCount = await confirmButtons.count();
+    await confirmButtons.first().click();
     const confirmation = page.getByRole('dialog', { name: '人工确认' });
+    const confirmed = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/v2/messages/`) &&
+        response.url().endsWith('/confirm') &&
+        response.request().method() === 'POST',
+    );
     await confirmation.getByRole('button', { name: '确定' }).click();
-    await expect(page.getByText('已确认并幂等执行')).toBeVisible();
+    expect((await confirmed).ok()).toBe(true);
     await expect(confirmation).toBeHidden();
+    await expect(confirmButtons).toHaveCount(pendingCount - 1);
+    await expect(page.getByText('已确认并幂等执行').last()).toBeVisible();
   }
   const messages = await data(await adminApi.get(`/api/v2/messages?projectId=${projectId}&search=${runId}`));
   const message = messages.items.find((item: { content: string }) => item.content === content);
