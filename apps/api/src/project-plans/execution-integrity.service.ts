@@ -28,6 +28,31 @@ export class ExecutionIntegrityService {
       });
   }
 
+  async assertDirectWorkItemCreationAllowed(projectId: string, required: boolean): Promise<void> {
+    if (!required) return;
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { status: true },
+    });
+    if (project && ['ACTIVE', 'PAUSED'].includes(project.status))
+      throw new ConflictException({
+        code: 'PROJECT_CHANGE_APPROVAL_REQUIRED',
+        message: '已启动项目新增必需任务属于范围变更，请通过项目变更申请处理',
+      });
+  }
+
+  async assertDirectWorkItemCancellationAllowed(workItemId: string): Promise<void> {
+    const item = await this.prisma.projectWorkItem.findUnique({
+      where: { id: workItemId },
+      select: { required: true, project: { select: { status: true } } },
+    });
+    if (item?.required && ['ACTIVE', 'PAUSED'].includes(item.project.status))
+      throw new ConflictException({
+        code: 'PROJECT_CHANGE_APPROVAL_REQUIRED',
+        message: '已启动项目取消必需任务属于范围变更，请通过项目变更申请处理',
+      });
+  }
+
   async assertSafeDirectSopSync(projectId: string): Promise<void> {
     const customCount = await this.prisma.projectWorkItem.count({
       where: {
