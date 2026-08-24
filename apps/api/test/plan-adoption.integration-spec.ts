@@ -11,6 +11,10 @@ const hasDatabase = Boolean(process.env.TEST_DATABASE_URL);
 const runId = Date.now().toString().slice(-8);
 const prefix = `PA${runId}`;
 type Agent = ReturnType<typeof request.agent>;
+type GeneratedPlanResponse = {
+  sourceSopVersionId: string | null;
+  stages: Array<{ name: string }>;
+};
 
 function cookieValue(cookies: string[], name: string): string {
   const cookie = cookies.find((value) => value.startsWith(`${name}=`));
@@ -137,12 +141,10 @@ describe.skipIf(!hasDatabase)('temporary manual plan adoption', () => {
     const generated = await write('post', `/api/v2/projects/${projectId}/plan`)
       .send({ sopVersionId: versionId })
       .expect(201);
+    const generatedData = generated.body.data as GeneratedPlanResponse;
 
-    expect(generated.body.data.sourceSopVersionId).toBe(versionId);
-    expect(generated.body.data.stages.map((item: { name: string }) => item.name)).toEqual([
-      '事前准备',
-      '临时任务',
-    ]);
+    expect(generatedData.sourceSopVersionId).toBe(versionId);
+    expect(generatedData.stages.map((item) => item.name)).toEqual(['事前准备', '临时任务']);
 
     const persistedManual = await prisma.projectWorkItem.findUniqueOrThrow({
       where: { id: manualWorkItemId },
