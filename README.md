@@ -26,7 +26,7 @@ npm run dev
 
 访问 `http://localhost:5173`，API 文档位于 `http://localhost:3000/api/docs`。首次管理员账号来自 `.env` 的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`，示例密码不得用于生产。
 
-AI、钉钉和禅道均为可选集成。未配置 AI Provider 时系统会正常启动，交付物仍可人工审核，页面明确显示“未配置”，不会使用伪造结果。
+当前版本的 AI、钉钉和禅道均为**预留集成接口**，生产运行不会主动连接这些外部服务，也不会伪造成功结果。核心项目管理、任务、Checklist、交付物和变更流程不依赖外部集成；正式交付物审核当前固定为人工审核。Fake AI 仅用于 `NODE_ENV=test` 下的契约与回归测试。
 
 `.env.example` 列出全部开发配置；至少需要数据库 URL、两个独立 JWT secret 和管理员初始账号。基础 seed 只创建权限、默认角色、知识分类和可选管理员；演示 SOP 必须显式运行：
 
@@ -61,4 +61,4 @@ npm run build
 
 ## Production Acceptance
 
-2026-08-24 Execution Domain Redesign 已在全新 MySQL 8.4 数据库完成 5/5 migration、seed，并通过 89 项单元测试、36 项真实 MySQL 集成测试和 11 项 Playwright E2E。Docker Compose 已原位升级，MySQL、API、Web 均 healthy；最大 JavaScript chunk 为 143.77 kB，依赖审计为 0 vulnerabilities。详见 [docs/V2-EXECUTION-ACCEPTANCE.md](docs/V2-EXECUTION-ACCEPTANCE.md)。
+2026-08-24 的 Functional Parity Recovery 已在 GitHub Actions 的 MySQL 8.4 隔离环境完成 5/5 migrations 与 seed，并通过 **100/100 Unit、37/37 Integration、11/11 Playwright E2E**，0 failed、0 skipped。`lint`、`typecheck`、`build`、API/Web Docker image build 与 `npm audit --audit-level=high` 均通过，依赖审计为 0 vulnerabilities。当前最大 JavaScript chunk 为 174.48 kB，gzip 67.27 kB。详见 [docs/V2-EXECUTION-ACCEPTANCE.md](docs/V2-EXECUTION-ACCEPTANCE.md)。
