@@ -27,7 +27,8 @@ export default defineConfig({
           },
         },
         {
-          command: 'npm run dev -w @pmp/web',
+          command:
+            'npm run build -w @pmp/shared-types && npm run build -w @pmp/shared-constants && npm run build -w @pmp/shared-utils && npm run build -w @pmp/web && npm run preview -w @pmp/web',
           url: 'http://127.0.0.1:5173',
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,
