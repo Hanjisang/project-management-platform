@@ -9,6 +9,7 @@ import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
 import { LocalStorageProvider } from './local-storage.provider';
 import { S3CompatibleStorageProvider } from './s3-compatible-storage.provider';
+import { StorageCleanupWorker } from './storage-cleanup.worker';
 import { STORAGE_PROVIDER } from './storage.provider';
 
 const aiReviewTestProviders =
@@ -22,6 +23,7 @@ const aiReviewTestProviders =
     ProgressService,
     DeliverableReviewDecisionService,
     LocalStorageProvider,
+    StorageCleanupWorker,
     ...aiReviewTestProviders,
     {
       provide: STORAGE_PROVIDER,
