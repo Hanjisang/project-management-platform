@@ -1,16 +1,24 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { sopApi } from '../../api/sop.api';
 import PageHeader from '../../components/PageHeader.vue';
 import StatusTag from '../../components/StatusTag.vue';
+import ApiErrorView from '../../components/ApiErrorView.vue';
+import { PERMISSIONS } from '@pmp/shared-constants';
+import { useAuthStore } from '../../stores/auth';
+import type { SopVersion } from '../../types/domain';
+const auth = useAuthStore();
 const client = useQueryClient();
 const selectedId = ref('');
 const templateDialog = ref(false);
 const taskDialog = ref(false);
 const selectedStage = ref('');
 const templateForm = reactive({ code: '', name: '', description: '' });
+function resetTemplateForm(): void {
+  Object.assign(templateForm, { code: '', name: '', description: '' });
+}
 const taskForm = reactive({
   name: '',
   description: '',
@@ -22,19 +30,21 @@ const taskForm = reactive({
 });
 const list = useQuery({ queryKey: ['sop-templates'], queryFn: sopApi.list });
 const detail = useQuery({
-  queryKey: ['sop-template', selectedId],
+  queryKey: computed(() => ['sop-template', selectedId.value]),
   queryFn: () => sopApi.get(selectedId.value),
   enabled: () => Boolean(selectedId.value),
 });
 async function refresh(): Promise<void> {
   await client.invalidateQueries({ queryKey: ['sop-templates'] });
-  if (selectedId.value) await client.invalidateQueries({ queryKey: ['sop-template', selectedId] });
+  if (selectedId.value)
+    await client.invalidateQueries({ queryKey: ['sop-template', selectedId.value] });
 }
 async function createTemplate(): Promise<void> {
   try {
     const result = (await sopApi.createTemplate(templateForm)) as { id: string };
     selectedId.value = result.id;
     templateDialog.value = false;
+    resetTemplateForm();
     ElMessage.success('SOP 模板已创建');
     await refresh();
   } catch (error) {
@@ -113,15 +123,69 @@ async function clone(versionId: string): Promise<void> {
   ElMessage.success('新草稿版本已创建');
   await refresh();
 }
+async function editStage(stage: NonNullable<SopVersion['stages']>[number]): Promise<void> {
+  const { value } = await ElMessageBox.prompt('阶段名称', '编辑 SOP 阶段', {
+    inputValue: stage.name,
+  });
+  await sopApi.updateStage(stage.id, { name: value });
+  await refresh();
+}
+async function removeStage(id: string): Promise<void> {
+  await ElMessageBox.confirm('确定删除该阶段及其任务？', '删除阶段', { type: 'warning' });
+  await sopApi.removeStage(id);
+  await refresh();
+}
+async function editTask(
+  task: NonNullable<SopVersion['stages']>[number]['tasks'][number],
+): Promise<void> {
+  const { value } = await ElMessageBox.prompt('任务名称', '编辑 SOP 任务', {
+    inputValue: task.name,
+  });
+  await sopApi.updateTask(task.id, {
+    name: value,
+    description: task.description,
+    sortOrder: task.sortOrder,
+    defaultDurationDays: task.defaultDurationDays,
+    required: task.required,
+    deliverableRequired: task.deliverableRequired,
+    deliverableName: task.deliverableName,
+  });
+  await refresh();
+}
+async function removeTask(id: string): Promise<void> {
+  await ElMessageBox.confirm('确定删除该任务及检查项？', '删除任务', { type: 'warning' });
+  await sopApi.removeTask(id);
+  await refresh();
+}
+async function removeChecklist(id: string): Promise<void> {
+  await ElMessageBox.confirm('确定删除该检查项？', '删除检查项', { type: 'warning' });
+  await sopApi.removeChecklist(id);
+  await refresh();
+}
 </script>
 <template>
   <div>
     <PageHeader
       title="SOP 管理"
       description="版本发布后不可变；项目使用独立快照，模板后续变更不会污染在执行项目"
-      ><el-button type="primary" @click="templateDialog = true">创建模板</el-button></PageHeader
+      ><el-button
+        v-if="auth.has(PERMISSIONS.SOP_CREATE)"
+        type="primary"
+        @click="templateDialog = true"
+        >创建模板</el-button
+      ></PageHeader
     >
-    <div class="content-grid" style="grid-template-columns: minmax(240px, 320px) minmax(0, 1fr)">
+    <ApiErrorView
+      v-if="list.isError.value"
+      :error="list.error.value"
+      title="SOP 模板加载失败"
+      @retry="list.refetch()"
+    />
+    <div
+      v-else
+      class="content-grid"
+      style="grid-template-columns: minmax(240px, 320px) minmax(0, 1fr)"
+    >
       <aside class="panel">
         <div class="panel-header"><h3>模板库</h3></div>
         <div style="padding: 8px">
@@ -143,7 +207,13 @@ async function clone(versionId: string): Promise<void> {
         </div>
       </aside>
       <section>
-        <el-empty v-if="!selectedId" description="请选择或创建 SOP 模板" /><template
+        <ApiErrorView
+          v-if="detail.isError.value"
+          :error="detail.error.value"
+          title="SOP 详情加载失败"
+          @retry="detail.refetch()"
+        />
+        <el-empty v-else-if="!selectedId" description="请选择或创建 SOP 模板" /><template
           v-else-if="detail.data.value"
           ><div class="detail-hero">
             <div>
@@ -151,7 +221,13 @@ async function clone(versionId: string): Promise<void> {
               <h2>{{ detail.data.value.name }}</h2>
               <p class="muted">{{ detail.data.value.description || '暂无说明' }}</p>
             </div>
-            <el-button type="primary" plain @click="createVersion">创建版本</el-button>
+            <el-button
+              v-if="auth.has(PERMISSIONS.SOP_CREATE)"
+              type="primary"
+              plain
+              @click="createVersion"
+              >创建版本</el-button
+            >
           </div>
           <el-collapse accordion
             ><el-collapse-item
@@ -168,16 +244,18 @@ async function clone(versionId: string): Promise<void> {
               >
               <div class="toolbar-actions" style="margin-bottom: 12px">
                 <el-button
-                  v-if="version.status === 'DRAFT'"
+                  v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_EDIT)"
                   type="primary"
                   @click="addStage(version.id)"
                   >新增阶段</el-button
                 ><el-button
-                  v-if="version.status === 'DRAFT'"
+                  v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_PUBLISH)"
                   type="success"
                   @click="publish(version.id)"
                   >发布版本</el-button
-                ><el-button v-else @click="clone(version.id)">创建新草稿</el-button>
+                ><el-button v-else-if="auth.has(PERMISSIONS.SOP_CREATE)" @click="clone(version.id)"
+                  >创建新草稿</el-button
+                >
               </div>
               <article v-for="stage in version.stages ?? []" :key="stage.id" class="plan-stage">
                 <div class="plan-stage-header">
@@ -187,12 +265,16 @@ async function clone(versionId: string): Promise<void> {
                       · {{ stage.defaultDurationDays }}天 · 权重 {{ stage.weight }}%</span
                     >
                   </div>
-                  <el-button
-                    v-if="version.status === 'DRAFT'"
-                    size="small"
-                    @click="openTask(stage.id)"
-                    >新增任务</el-button
+                  <div
+                    v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_EDIT)"
+                    class="toolbar-actions"
                   >
+                    <el-button size="small" @click="editStage(stage)">编辑阶段</el-button
+                    ><el-button size="small" @click="openTask(stage.id)">新增任务</el-button
+                    ><el-button size="small" type="danger" @click="removeStage(stage.id)"
+                      >删除阶段</el-button
+                    >
+                  </div>
                 </div>
                 <div v-for="task in stage.tasks" :key="task.id" class="plan-task">
                   <div style="display: flex; justify-content: space-between; gap: 12px">
@@ -205,17 +287,29 @@ async function clone(versionId: string): Promise<void> {
                         交付物：{{ task.deliverableName }}
                       </div>
                     </div>
-                    <el-button
-                      v-if="version.status === 'DRAFT'"
-                      size="small"
-                      text
-                      @click="addChecklist(task.id)"
-                      >新增检查项</el-button
+                    <div
+                      v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_EDIT)"
+                      class="toolbar-actions"
                     >
+                      <el-button size="small" text @click="editTask(task)">编辑</el-button
+                      ><el-button size="small" text @click="addChecklist(task.id)"
+                        >新增检查项</el-button
+                      ><el-button size="small" text type="danger" @click="removeTask(task.id)"
+                        >删除</el-button
+                      >
+                    </div>
                   </div>
                   <div class="checklist">
                     <div v-for="check in task.checklistItems" :key="check.id">
-                      □ {{ check.name }}<span v-if="check.required" class="danger-text"> *</span>
+                      □ {{ check.name }}<span v-if="check.required" class="danger-text"> *</span
+                      ><el-button
+                        v-if="version.status === 'DRAFT' && auth.has(PERMISSIONS.SOP_EDIT)"
+                        text
+                        type="danger"
+                        size="small"
+                        @click="removeChecklist(check.id)"
+                        >删除</el-button
+                      >
                     </div>
                     <span v-if="!task.checklistItems.length" class="muted">暂无检查项</span>
                   </div>
@@ -226,7 +320,12 @@ async function clone(versionId: string): Promise<void> {
         >
       </section>
     </div>
-    <el-dialog v-model="templateDialog" title="创建 SOP 模板" width="min(560px,94vw)"
+    <el-dialog
+      v-model="templateDialog"
+      title="创建 SOP 模板"
+      width="min(560px,94vw)"
+      destroy-on-close
+      @closed="resetTemplateForm"
       ><el-form label-position="top"
         ><el-form-item label="模板编码" required
           ><el-input

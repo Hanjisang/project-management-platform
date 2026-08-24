@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { businessToday } from '@pmp/shared-utils';
 import { requestIdMiddleware } from '../src/common/request-id.middleware';
 import type { PrismaService as PrismaServiceType } from '../src/prisma/prisma.service';
 
@@ -274,6 +275,116 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
     expect(dashboard.body.data.summary.overdueTaskCount).toBe(0);
     expect(dashboard.body.data.summary.highRiskIssueCount).toBe(0);
     expect(JSON.stringify(dashboard.body.data)).not.toContain(projectB);
+
+    const roles = await admin.agent.get('/api/v2/roles').expect(200);
+    const systemRole = (roles.body.data as Array<{ id: string; system: boolean }>).find(
+      (role) => role.system,
+    );
+    expect(systemRole).toBeTruthy();
+    await write(admin, 'patch', `/api/v2/roles/${systemRole!.id}`)
+      .send({ name: '禁止修改系统角色' })
+      .expect(409);
+  });
+
+  it('keeps dashboard totals independent from the 20-row detail limit and respects business dates', async () => {
+    const today = businessToday();
+    const yesterday = new Date(today);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    await prisma.task.createMany({
+      data: Array.from({ length: 21 }, (_, index) => ({
+        projectId: projectA,
+        title: `Overdue total ${index}`,
+        dueDate: yesterday,
+        createdById: memberA.user.id,
+        sourceType: 'MANUAL' as const,
+        sourceId: `${prefix}-dashboard-task-${index}`,
+      })),
+    });
+    await prisma.issue.createMany({
+      data: Array.from({ length: 21 }, (_, index) => ({
+        projectId: projectA,
+        type: 'RISK' as const,
+        title: `High risk total ${index}`,
+        severity: 'HIGH' as const,
+        createdById: memberA.user.id,
+        sourceType: 'MANUAL' as const,
+        sourceId: `${prefix}-dashboard-issue-${index}`,
+      })),
+    });
+    const todayTask = await prisma.task.create({
+      data: {
+        projectId: projectA,
+        title: 'Today is not overdue',
+        dueDate: today,
+        createdById: memberA.user.id,
+      },
+    });
+    const dashboard = await memberA.agent.get('/api/v2/dashboard').expect(200);
+    expect(dashboard.body.data.summary.overdueTaskCount).toBeGreaterThanOrEqual(21);
+    expect(dashboard.body.data.summary.highRiskIssueCount).toBeGreaterThanOrEqual(21);
+    expect(dashboard.body.data.overdueTasks).toHaveLength(20);
+    expect(dashboard.body.data.highRiskIssues).toHaveLength(20);
+    expect(
+      (dashboard.body.data.overdueTasks as Array<{ id: string }>).some(
+        (item) => item.id === todayTask.id,
+      ),
+    ).toBe(false);
+    await prisma.task.deleteMany({
+      where: { sourceId: { startsWith: `${prefix}-dashboard-task-` } },
+    });
+    await prisma.issue.deleteMany({
+      where: { sourceId: { startsWith: `${prefix}-dashboard-issue-` } },
+    });
+    await prisma.task.delete({ where: { id: todayTask.id } });
+  });
+
+  it('rejects invalid project and task dates even when PATCH supplies only one side', async () => {
+    await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
+      .send({ plannedStartDate: '2026-09-10', plannedGoLiveDate: '2026-09-01' })
+      .expect(400);
+    await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
+      .send({ plannedStartDate: '2026-09-01', plannedGoLiveDate: '2026-09-10' })
+      .expect(200);
+    await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
+      .send({ plannedStartDate: '2026-09-11' })
+      .expect(400);
+    await write(memberA, 'post', '/api/v2/tasks')
+      .send({
+        projectId: projectA,
+        title: 'Invalid dates',
+        plannedStartDate: '2026-09-10',
+        dueDate: '2026-09-01',
+      })
+      .expect(400);
+    const task = await write(memberA, 'post', '/api/v2/tasks')
+      .send({
+        projectId: projectA,
+        title: 'Partial date validation',
+        plannedStartDate: '2026-09-01',
+        dueDate: '2026-09-10',
+      })
+      .expect(201);
+    await write(memberA, 'patch', `/api/v2/tasks/${task.body.data.id}`)
+      .send({ plannedStartDate: '2026-09-11' })
+      .expect(400);
+    await write(memberA, 'patch', `/api/v2/tasks/${task.body.data.id}`)
+      .send({ status: 'CANCELLED' })
+      .expect(200);
+  });
+
+  it('exposes healthOverride as effective health and restores the derived value when cleared', async () => {
+    const overridden = await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
+      .send({ healthOverride: 'HIGH_RISK' })
+      .expect(200);
+    expect(overridden.body.data.health).toBe('HIGH_RISK');
+    expect(overridden.body.data.effectiveHealth).toBe('HIGH_RISK');
+    expect(overridden.body.data.derivedHealth).toBeTruthy();
+    const detail = await managerA.agent.get(`/api/v2/projects/${projectA}`).expect(200);
+    expect(detail.body.data.health).toBe('HIGH_RISK');
+    const cleared = await write(managerA, 'patch', `/api/v2/projects/${projectA}`)
+      .send({ healthOverride: null })
+      .expect(200);
+    expect(cleared.body.data.health).toBe(cleared.body.data.derivedHealth);
   });
 
   it('creates and publishes SOP V1, snapshots it into a plan and keeps the published version immutable', async () => {
@@ -393,9 +504,9 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
     await write(memberA, 'patch', `/api/v2/tasks/${linkedTaskId}`)
       .send({ title: '关联计划任务-已修改', status: 'IN_PROGRESS', progress: 30 })
       .expect(200);
-    const completed = await write(memberA, 'patch', `/api/v2/tasks/${linkedTaskId}`)
-      .send({ status: 'DONE' })
-      .expect(200);
+    const completed = await write(memberA, 'post', `/api/v2/tasks/${linkedTaskId}/complete`)
+      .send({})
+      .expect(201);
     expect(completed.body.data.progress).toBe(100);
 
     const standalone = await write(memberA, 'post', '/api/v2/tasks')
@@ -429,13 +540,15 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
       ids.push(created.body.data.id as string);
     }
     highIssueId = ids[2]!;
-    for (const status of ['PROCESSING', 'WAITING', 'RESOLVED', 'CLOSED'])
+    for (const status of ['PROCESSING', 'WAITING'])
       await write(memberA, 'patch', `/api/v2/issues/${ids[0]}`).send({ status }).expect(200);
+    await write(memberA, 'post', `/api/v2/issues/${ids[0]}/resolve`).send({}).expect(201);
+    await write(memberA, 'post', `/api/v2/issues/${ids[0]}/close`).send({}).expect(403);
+    await write(managerA, 'post', `/api/v2/issues/${ids[0]}/close`).send({}).expect(201);
     const project = await managerA.agent.get(`/api/v2/projects/${projectA}`).expect(200);
     expect(project.body.data.health).toBe('HIGH_RISK');
-    await write(memberA, 'patch', `/api/v2/issues/${ids[3]}`)
-      .send({ status: 'CLOSED' })
-      .expect(200);
+    await write(memberA, 'post', `/api/v2/issues/${ids[3]}/resolve`).send({}).expect(201);
+    await write(managerA, 'post', `/api/v2/issues/${ids[3]}/close`).send({}).expect(201);
   });
 
   it('uploads, versions, downloads, rejects, approves and deletes documents', async () => {
@@ -451,12 +564,15 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
       .expect(201);
     requiredDocumentId = created.body.data.id as string;
     const v1Id = created.body.data.versions[0].id as string;
+    await write(admin, 'post', `/api/v2/documents/${requiredDocumentId}/reviews`)
+      .send({ status: 'APPROVED' })
+      .expect(409);
     const download = await memberA.agent
       .get(`/api/v2/document-versions/${v1Id}/download`)
       .expect(200);
     expect(download.text).toBe('acceptance document v1');
-    await write(admin, 'post', `/api/v2/documents/${requiredDocumentId}/reviews`)
-      .send({ status: 'PENDING' })
+    await write(memberA, 'post', `/api/v2/documents/${requiredDocumentId}/submit`)
+      .send({})
       .expect(201);
     await write(admin, 'post', `/api/v2/documents/${requiredDocumentId}/reviews`)
       .send({ status: 'REJECTED', comment: '需要修订' })
@@ -468,8 +584,8 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
         contentType: 'text/plain',
       })
       .expect(201);
-    await write(admin, 'post', `/api/v2/documents/${requiredDocumentId}/reviews`)
-      .send({ status: 'PENDING' })
+    await write(memberA, 'post', `/api/v2/documents/${requiredDocumentId}/submit`)
+      .send({})
       .expect(201);
     await write(admin, 'post', `/api/v2/documents/${requiredDocumentId}/reviews`)
       .send({ status: 'APPROVED', comment: '验收通过' })
@@ -577,9 +693,7 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
         await write(managerA, 'patch', `/api/v2/checklist-items/${item.id}`)
           .send({ completed: true })
           .expect(200);
-    await write(memberA, 'patch', `/api/v2/issues/${highIssueId}`)
-      .send({ status: 'RESOLVED' })
-      .expect(200);
+    await write(memberA, 'post', `/api/v2/issues/${highIssueId}/resolve`).send({}).expect(201);
     await prisma.issue.updateMany({
       where: { projectId: projectA, severity: { in: ['HIGH', 'CRITICAL'] } },
       data: { status: 'CLOSED', resolvedAt: new Date() },
@@ -613,6 +727,28 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
     }
     expect(closed.body.data.status).toBe('COMPLETED');
     expect(closed.body.data.progress).toBe(100);
+
+    await write(memberA, 'patch', `/api/v2/tasks/${linkedTaskId}`)
+      .send({ title: '结项后禁止修改' })
+      .expect(409);
+    await write(memberA, 'patch', `/api/v2/issues/${highIssueId}`)
+      .send({ title: '结项后禁止修改' })
+      .expect(409);
+    await write(memberA, 'post', `/api/v2/documents/${requiredDocumentId}/versions`)
+      .field('version', 'V9.9')
+      .attach('file', Buffer.from('forbidden'), {
+        filename: 'forbidden.txt',
+        contentType: 'text/plain',
+      })
+      .expect(409);
+    const closedPlan = await managerA.agent.get(`/api/v2/projects/${projectA}/plan`).expect(200);
+    await write(
+      managerA,
+      'patch',
+      `/api/v2/checklist-items/${closedPlan.body.data.stages[0].tasks[0].checklistItems[0].id}`,
+    )
+      .send({ completed: false })
+      .expect(409);
   });
 
   it('keeps unconfigured external adapters non-fatal while fake AI is test-only', async () => {
@@ -621,5 +757,28 @@ describe.skipIf(!hasDatabase)('V2 production acceptance against MySQL', () => {
     expect(dingtalk.body.data.status).toBe('NOT_CONFIGURED');
     expect(zentao.body.data.status).toBe('NOT_CONFIGURED');
     expect(process.env.NODE_ENV).toBe('test');
+  });
+
+  it('allows member managers to query paged user options without project.create', async () => {
+    const response = await managerA.agent
+      .get(`/api/v2/project-user-options?search=${prefix.toLowerCase()}&page=1&pageSize=2`)
+      .expect(200);
+    expect(response.body.data.items).toHaveLength(2);
+    expect(response.body.data.total).toBeGreaterThanOrEqual(4);
+  });
+
+  it('protects system roles and the last active administrator', async () => {
+    const administratorRole = await prisma.role.findUniqueOrThrow({
+      where: { code: 'ADMINISTRATOR' },
+    });
+    const roleResponse = await write(admin, 'patch', `/api/v2/roles/${administratorRole.id}`)
+      .send({ name: '不可修改的系统管理员' })
+      .expect(409);
+    expect(roleResponse.body.code).toBe('SYSTEM_ROLE_IMMUTABLE');
+
+    const disableResponse = await write(admin, 'patch', `/api/v2/users/${admin.user.id}`)
+      .send({ status: 'DISABLED' })
+      .expect(400);
+    expect(disableResponse.body.code).toBe('LAST_ADMINISTRATOR_REQUIRED');
   });
 });

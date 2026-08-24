@@ -3,6 +3,8 @@ node_modules
 coverage
 playwright-report
 test-results
+apps/web/src/auto-imports.d.ts
+apps/web/src/components.d.ts
 index.html
 server*.js
 auth.js

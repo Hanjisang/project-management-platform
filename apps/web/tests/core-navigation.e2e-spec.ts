@@ -24,17 +24,32 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-async function navigate(page: import('@playwright/test').Page, label: string): Promise<void> {
-  if ((page.viewportSize()?.width ?? 1280) < 860) await page.getByRole('button', { name: '打开导航' }).click();
-  await page.locator('button.nav-item:visible').filter({ hasText: label }).click();
+async function navigate(
+  page: import('@playwright/test').Page,
+  label: string,
+  path: string,
+): Promise<void> {
+  let navigation = page.locator('.sidebar');
+  if ((page.viewportSize()?.width ?? 1280) < 860) {
+    await page.getByRole('button', { name: '打开导航' }).click();
+    navigation = page.locator('.el-drawer:visible');
+    await expect(navigation).toBeVisible();
+    await navigation.evaluate(async (element) => {
+      await Promise.all(
+        element.getAnimations({ subtree: true }).map((animation) => animation.finished),
+      );
+    });
+  }
+  await navigation.getByRole('button', { name: label, exact: true }).click();
+  await expect(page).toHaveURL(path);
 }
 
 test('navigates the responsive shell and reports unconfigured AI honestly', async ({ page }) => {
   await page.goto('/dashboard');
   await expect(page.getByRole('heading', { name: '管理驾驶舱' })).toBeVisible();
-  await navigate(page, '消息中心');
+  await navigate(page, '消息中心', '/messages');
   await expect(page.getByText('AI 服务未配置')).toBeVisible();
-  await navigate(page, '集成配置');
+  await navigate(page, '集成配置', '/system/integrations');
   await expect(page.getByRole('heading', { name: '集成配置', level: 2 })).toBeVisible();
   await expect(page.getByText('当前未配置')).toBeVisible();
 });

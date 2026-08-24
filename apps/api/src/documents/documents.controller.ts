@@ -71,6 +71,12 @@ export class DocumentsController {
   ) {
     return this.service.review(user, id, dto);
   }
+  @Post('documents/:id/submit')
+  @RequirePermissions(PERMISSIONS.DOCUMENT_UPLOAD)
+  @AuditAction('document.submit', 'Document')
+  submit(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.service.submit(user, id);
+  }
   @Get('document-versions/:id/download')
   @RequirePermissions(PERMISSIONS.DOCUMENT_VIEW)
   async download(

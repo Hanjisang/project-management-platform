@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -9,15 +9,29 @@ import { useAuthStore } from '../../stores/auth';
 import type { Project } from '../../types/domain';
 import PageHeader from '../../components/PageHeader.vue';
 import StatusTag from '../../components/StatusTag.vue';
+import RemoteUserSelect from '../../components/RemoteUserSelect.vue';
+import ApiErrorView from '../../components/ApiErrorView.vue';
+import type { ProjectHealth, ProjectStatus } from '@pmp/shared-types';
 const stored = sessionStorage.getItem('pmp:project-filters');
-const filters = reactive(
+const filters = reactive<{
+  search: string;
+  status: ProjectStatus | '';
+  health: ProjectHealth | '';
+}>(
   stored
-    ? (JSON.parse(stored) as { search: string; status: string; health: string })
+    ? (JSON.parse(stored) as {
+        search: string;
+        status: ProjectStatus | '';
+        health: ProjectHealth | '';
+      })
     : { search: '', status: '', health: '' },
 );
 watch(filters, (value) => sessionStorage.setItem('pmp:project-filters', JSON.stringify(value)), {
   deep: true,
 });
+const page = ref(1);
+const pageSize = ref(20);
+watch(filters, () => (page.value = 1), { deep: true });
 const router = useRouter();
 const auth = useAuthStore();
 const client = useQueryClient();
@@ -31,14 +45,20 @@ const form = reactive({
   plannedGoLiveDate: '',
   description: '',
 });
+function resetCreateForm(): void {
+  Object.assign(form, {
+    code: '',
+    name: '',
+    customerName: '',
+    managerUserId: '',
+    plannedStartDate: '',
+    plannedGoLiveDate: '',
+    description: '',
+  });
+}
 const query = useQuery({
-  queryKey: ['projects', filters],
-  queryFn: () => projectsApi.list({ ...filters, pageSize: 100 }),
-});
-const users = useQuery({
-  queryKey: ['project-user-options'],
-  queryFn: projectsApi.userOptions,
-  enabled: auth.has(PERMISSIONS.PROJECT_CREATE),
+  queryKey: computed(() => ['projects', { ...filters }, page.value, pageSize.value]),
+  queryFn: () => projectsApi.list({ ...filters, page: page.value, pageSize: pageSize.value }),
 });
 const create = useMutation({
   mutationFn: () =>
@@ -50,6 +70,7 @@ const create = useMutation({
   onSuccess: async (project) => {
     ElMessage.success('项目已创建');
     dialog.value = false;
+    resetCreateForm();
     await client.invalidateQueries({ queryKey: ['projects'] });
     await router.push(`/projects/${project.id}`);
   },
@@ -86,7 +107,13 @@ function openProject(row: Project): void {
         /></el-select>
       </div>
     </div>
-    <div class="panel table-wrap">
+    <ApiErrorView
+      v-if="query.isError.value"
+      :error="query.error.value"
+      title="项目列表加载失败"
+      @retry="query.refetch()"
+    />
+    <div v-else class="panel table-wrap">
       <el-table
         v-loading="query.isLoading.value"
         :data="query.data.value?.items ?? []"
@@ -120,8 +147,22 @@ function openProject(row: Project): void {
         v-if="!query.isLoading.value && !query.data.value?.items.length"
         description="没有匹配的项目"
       />
+      <el-pagination
+        v-if="query.data.value?.total"
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :total="query.data.value.total"
+        :page-sizes="[10, 20, 50]"
+        layout="total, sizes, prev, pager, next"
+        style="padding: 16px"
+      />
     </div>
-    <el-dialog v-model="dialog" title="创建项目" width="min(640px, 94vw)" destroy-on-close
+    <el-dialog
+      v-model="dialog"
+      title="创建项目"
+      width="min(640px, 94vw)"
+      destroy-on-close
+      @closed="resetCreateForm"
       ><el-form label-position="top"
         ><div class="content-grid">
           <el-form-item label="项目编码" required
@@ -131,12 +172,7 @@ function openProject(row: Project): void {
           ><el-form-item label="客户名称" required
             ><el-input v-model.trim="form.customerName" /></el-form-item
           ><el-form-item label="项目负责人" required
-            ><el-select v-model="form.managerUserId" filterable style="width: 100%"
-              ><el-option
-                v-for="user in users.data.value ?? []"
-                :key="user.id"
-                :label="`${user.displayName} (${user.username})`"
-                :value="user.id" /></el-select></el-form-item
+            ><RemoteUserSelect v-model="form.managerUserId" /></el-form-item
           ><el-form-item label="计划开始"
             ><el-date-picker
               v-model="form.plannedStartDate"

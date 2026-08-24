@@ -61,3 +61,13 @@ export class ProjectListQueryDto {
   @Max(100)
   pageSize = 20;
 }
+export class ProjectUserOptionsQueryDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() search?: string;
+  @ApiPropertyOptional({ default: 1 }) @IsOptional() @Type(() => Number) @Min(1) page = 1;
+  @ApiPropertyOptional({ default: 20 })
+  @IsOptional()
+  @Type(() => Number)
+  @Min(1)
+  @Max(100)
+  pageSize = 20;
+}

@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage } from 'element-plus';
-import { projectsApi } from '../../api/projects.api';
 import { reportsApi } from '../../api/reports.api';
 import PageHeader from '../../components/PageHeader.vue';
+import RemoteProjectSelect from '../../components/RemoteProjectSelect.vue';
+import ApiErrorView from '../../components/ApiErrorView.vue';
+import { PERMISSIONS } from '@pmp/shared-constants';
+import { useAuthStore } from '../../stores/auth';
 const client = useQueryClient();
 const dailyDialog = ref(false);
 const weeklyDialog = ref(false);
+const weeklyDetail = ref<Record<string, unknown> | null>(null);
+const auth = useAuthStore();
 const projectId = ref('');
 const daily = reactive({
   projectId: '',
@@ -19,12 +24,22 @@ const daily = reactive({
   notes: '',
 });
 const weekly = reactive({ projectId: '', department: '', weekStart: '', weekEnd: '' });
-const projects = useQuery({
-  queryKey: ['projects', 'report-selector'],
-  queryFn: () => projectsApi.list({ pageSize: 100 }),
-});
+function resetDailyForm(): void {
+  Object.assign(daily, {
+    projectId: '',
+    reportDate: '',
+    completed: '',
+    risks: '',
+    coordination: '',
+    tomorrow: '',
+    notes: '',
+  });
+}
+function resetWeeklyForm(): void {
+  Object.assign(weekly, { projectId: '', department: '', weekStart: '', weekEnd: '' });
+}
 const dailyList = useQuery({
-  queryKey: ['daily-reports', projectId],
+  queryKey: computed(() => ['daily-reports', projectId.value]),
   queryFn: () => reportsApi.daily(projectId.value ? { projectId: projectId.value } : undefined),
 });
 const weeklyList = useQuery({ queryKey: ['weekly-reports'], queryFn: reportsApi.weekly });
@@ -45,6 +60,7 @@ const saveDaily = useMutation({
   onSuccess: async () => {
     ElMessage.success('日报已提交');
     dailyDialog.value = false;
+    resetDailyForm();
     await client.invalidateQueries({ queryKey: ['daily-reports'] });
   },
   onError: (error: Error) => ElMessage.error(error.message),
@@ -59,6 +75,7 @@ const generate = useMutation({
   onSuccess: async () => {
     ElMessage.success('周报基础数据已聚合');
     weeklyDialog.value = false;
+    resetWeeklyForm();
     await client.invalidateQueries({ queryKey: ['weekly-reports'] });
   },
   onError: (error: Error) => ElMessage.error(error.message),
@@ -69,25 +86,26 @@ const generate = useMutation({
     <PageHeader
       title="日报周报"
       description="周报从任务、问题风险、项目计划、日报和消息聚合基础数据"
-      ><el-button @click="weeklyDialog = true">生成周报</el-button
-      ><el-button type="primary" @click="dailyDialog = true">填写日报</el-button></PageHeader
+      ><el-button v-if="auth.has(PERMISSIONS.REPORT_SUBMIT)" @click="weeklyDialog = true"
+        >生成周报</el-button
+      ><el-button
+        v-if="auth.has(PERMISSIONS.REPORT_SUBMIT)"
+        type="primary"
+        @click="dailyDialog = true"
+        >填写日报</el-button
+      ></PageHeader
     ><el-tabs
       ><el-tab-pane label="日报"
         ><div class="filters">
-          <el-select
-            v-model="projectId"
-            clearable
-            filterable
-            placeholder="按项目筛选"
-            style="width: 260px"
-            ><el-option
-              v-for="project in projects.data.value?.items ?? []"
-              :key="project.id"
-              :label="project.name"
-              :value="project.id"
-          /></el-select>
+          <RemoteProjectSelect v-model="projectId" placeholder="按项目筛选" style="width: 260px" />
         </div>
-        <div class="panel table-wrap">
+        <ApiErrorView
+          v-if="dailyList.isError.value"
+          :error="dailyList.error.value"
+          title="日报加载失败"
+          @retry="dailyList.refetch()"
+        />
+        <div v-else class="panel table-wrap">
           <el-table :data="dailyList.data.value ?? []"
             ><el-table-column prop="reportDate" label="日期" width="130" /><el-table-column
               prop="project.name"
@@ -109,8 +127,15 @@ const generate = useMutation({
           >
         </div></el-tab-pane
       ><el-tab-pane label="周报"
-        ><div class="panel table-wrap">
-          <el-table :data="weeklyList.data.value ?? []"
+        ><ApiErrorView
+          v-if="weeklyList.isError.value"
+          :error="weeklyList.error.value"
+          title="周报加载失败"
+          @retry="weeklyList.refetch()" />
+        <div v-else class="panel table-wrap">
+          <el-table
+            :data="weeklyList.data.value ?? []"
+            @row-click="(row: Record<string, unknown>) => (weeklyDetail = row)"
             ><el-table-column prop="weekStart" label="周期开始" width="130" /><el-table-column
               prop="weekEnd"
               label="周期结束"
@@ -119,22 +144,22 @@ const generate = useMutation({
               label="项目"
               min-width="180" /><el-table-column
               prop="department"
-              label="部门"
+              label="报告标签"
               min-width="140" /><el-table-column
               prop="creator.displayName"
               label="生成人"
               width="120"
           /></el-table></div></el-tab-pane></el-tabs
-    ><el-dialog v-model="dailyDialog" title="填写项目日报" width="min(680px,94vw)"
+    ><el-dialog
+      v-model="dailyDialog"
+      title="填写项目日报"
+      width="min(680px,94vw)"
+      destroy-on-close
+      @closed="resetDailyForm"
       ><el-form label-position="top"
         ><div class="content-grid">
           <el-form-item label="项目" required
-            ><el-select v-model="daily.projectId" filterable style="width: 100%"
-              ><el-option
-                v-for="project in projects.data.value?.items ?? []"
-                :key="project.id"
-                :label="project.name"
-                :value="project.id" /></el-select></el-form-item
+            ><RemoteProjectSelect v-model="daily.projectId" /></el-form-item
           ><el-form-item label="汇报日期" required
             ><el-date-picker
               v-model="daily.reportDate"
@@ -150,7 +175,9 @@ const generate = useMutation({
         ><el-form-item label="需协调事项"
           ><el-input v-model="daily.coordination" type="textarea" :rows="3" /></el-form-item
         ><el-form-item label="明日计划"
-          ><el-input v-model="daily.tomorrow" type="textarea" :rows="3" /></el-form-item></el-form
+          ><el-input v-model="daily.tomorrow" type="textarea" :rows="3" /></el-form-item
+        ><el-form-item label="备注"
+          ><el-input v-model="daily.notes" type="textarea" :rows="2" /></el-form-item></el-form
       ><template #footer
         ><el-button @click="dailyDialog = false">取消</el-button
         ><el-button
@@ -161,16 +188,18 @@ const generate = useMutation({
           >提交</el-button
         ></template
       ></el-dialog
-    ><el-dialog v-model="weeklyDialog" title="生成周报基础数据" width="min(560px,94vw)"
+    ><el-dialog
+      v-model="weeklyDialog"
+      title="生成周报基础数据"
+      width="min(560px,94vw)"
+      destroy-on-close
+      @closed="resetWeeklyForm"
       ><el-form label-position="top"
-        ><el-form-item label="项目（留空表示部门汇总）"
-          ><el-select v-model="weekly.projectId" clearable filterable style="width: 100%"
-            ><el-option
-              v-for="project in projects.data.value?.items ?? []"
-              :key="project.id"
-              :label="project.name"
-              :value="project.id" /></el-select></el-form-item
-        ><el-form-item label="部门"><el-input v-model.trim="weekly.department" /></el-form-item>
+        ><el-form-item label="项目（留空表示汇总当前用户有权访问的全部项目）"
+          ><RemoteProjectSelect v-model="weekly.projectId" /></el-form-item
+        ><el-form-item label="报告标签（不参与数据过滤）"
+          ><el-input v-model.trim="weekly.department"
+        /></el-form-item>
         <div class="content-grid">
           <el-form-item label="开始日期" required
             ><el-date-picker
@@ -195,6 +224,15 @@ const generate = useMutation({
           >生成</el-button
         ></template
       ></el-dialog
+    ><el-dialog
+      :model-value="Boolean(weeklyDetail)"
+      title="周报生成快照"
+      width="min(780px,94vw)"
+      @close="weeklyDetail = null"
     >
+      <pre style="white-space: pre-wrap; max-height: 60vh; overflow: auto">{{
+        JSON.stringify(weeklyDetail?.content ?? {}, null, 2)
+      }}</pre>
+    </el-dialog>
   </div>
 </template>

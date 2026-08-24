@@ -22,12 +22,23 @@ export class UsersService {
   }
   async update(id: string, dto: UpdateUserDto) {
     const roles = dto.roleCodes ? await this.resolveRoles(dto.roleCodes) : undefined;
-    return this.repository.update(id, {
-      displayName: dto.displayName?.trim(),
-      email: dto.email,
-      status: dto.status,
-      roleIds: roles?.map((role) => role.id),
-    });
+    const existing = await this.repository.findForAdministratorProtection(id);
+    const isActiveAdministrator =
+      existing?.status === 'ACTIVE' &&
+      existing.roles.some((assignment) => assignment.role.code === 'ADMINISTRATOR');
+    const removesAdministrator =
+      dto.roleCodes !== undefined && !dto.roleCodes.includes('ADMINISTRATOR');
+    const disablesAdministrator = dto.status !== undefined && dto.status !== 'ACTIVE';
+    return this.repository.update(
+      id,
+      {
+        displayName: dto.displayName?.trim(),
+        email: dto.email,
+        status: dto.status,
+        roleIds: roles?.map((role) => role.id),
+      },
+      Boolean(isActiveAdministrator && (removesAdministrator || disablesAdministrator)),
+    );
   }
   private async resolveRoles(codes: string[]) {
     const uniqueCodes = [...new Set(codes)];

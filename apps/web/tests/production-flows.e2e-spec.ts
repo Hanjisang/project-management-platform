@@ -14,6 +14,7 @@ const prefix = `PW${runId}`;
 const projectName = `Playwright 项目 ${runId}`;
 const projectBName = `隔离项目 B ${runId}`;
 const password = 'playwright-user-password';
+const baseURL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:5173';
 let adminApi: APIRequestContext;
 let memberApi: APIRequestContext;
 let viewerApi: APIRequestContext;
@@ -60,7 +61,7 @@ async function useState(context: BrowserContext, state: typeof adminState): Prom
 }
 
 test.beforeAll(async () => {
-  adminApi = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:5173' });
+  adminApi = await playwrightRequest.newContext({ baseURL });
   const login = await adminApi.post('/api/v2/auth/login', {
     data: {
       username: process.env.ADMIN_USERNAME ?? 'acceptance_admin',
@@ -150,7 +151,7 @@ test.beforeAll(async () => {
     sopVersionId: versionId,
   });
 
-  memberApi = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:5173' });
+  memberApi = await playwrightRequest.newContext({ baseURL });
   await data(
     await memberApi.post('/api/v2/auth/login', {
       data: { username: `${prefix.toLowerCase()}member`, password },
@@ -159,7 +160,7 @@ test.beforeAll(async () => {
   memberState = await memberApi.storageState();
   memberCsrf = token(memberState);
 
-  viewerApi = await playwrightRequest.newContext({ baseURL: 'http://127.0.0.1:5173' });
+  viewerApi = await playwrightRequest.newContext({ baseURL });
   await data(
     await viewerApi.post('/api/v2/auth/login', {
       data: { username: `${prefix.toLowerCase()}viewer`, password },
@@ -261,6 +262,7 @@ test('E — HIGH Risk changes dashboard health and can be closed through the UI'
   await page.goto('/dashboard');
   await expect(page.getByText(title, { exact: true })).toBeVisible();
   await page.goto('/issues');
+  await page.locator('.el-table__row').filter({ hasText: title }).getByRole('button', { name: '解决' }).click();
   await page.locator('.el-table__row').filter({ hasText: title }).getByRole('button', { name: '关闭' }).click();
   await expect(page.locator('.el-table__row').filter({ hasText: title })).toContainText('已关闭');
 });
@@ -281,6 +283,7 @@ test('F — uploads and approves a real Document without committing a fixture fi
   await expect(row).toBeVisible();
   const documents = await data(await adminApi.get(`/api/v2/projects/${projectId}/documents`));
   documentId = documents.find((item: { name: string }) => item.name === `E2E 文档 ${runId}`).id;
+  await row.getByRole('button', { name: '提交审核' }).click();
   await row.getByRole('button', { name: '通过' }).click();
   await expect(row).toContainText('已通过');
 });

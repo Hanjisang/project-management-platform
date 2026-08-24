@@ -1,4 +1,17 @@
-import type { Paginated } from '@pmp/shared-types';
+import type {
+  DocumentStatus,
+  IssueSeverity,
+  IssueStatus,
+  IssueType,
+  KnowledgeStatus,
+  MessageStatus,
+  Paginated,
+  ProjectHealth,
+  ProjectRole,
+  ProjectStatus,
+  TaskPriority,
+  TaskStatus,
+} from '@pmp/shared-types';
 export type Page<T> = Paginated<T>;
 export interface UserRef {
   id: string;
@@ -12,8 +25,10 @@ export interface Project {
   customerName: string;
   managerUserId: string;
   manager: UserRef;
-  status: string;
-  health: string;
+  status: ProjectStatus;
+  health: ProjectHealth;
+  derivedHealth?: ProjectHealth;
+  effectiveHealth?: ProjectHealth;
   progress: number;
   plannedStartDate?: string;
   plannedGoLiveDate?: string;
@@ -32,7 +47,7 @@ export interface Project {
 export interface ProjectMember {
   projectId: string;
   userId: string;
-  projectRole: string;
+  projectRole: ProjectRole;
   user: UserRef & { status?: string };
 }
 export interface ChecklistItem {
@@ -77,9 +92,10 @@ export interface Task {
   projectId: string;
   title: string;
   description?: string;
-  status: string;
-  priority: string;
+  status: TaskStatus;
+  priority: TaskPriority;
   progress: number;
+  plannedStartDate?: string;
   dueDate?: string;
   project: Pick<Project, 'id' | 'code' | 'name'>;
   owner?: UserRef;
@@ -89,12 +105,14 @@ export interface Task {
 export interface Issue {
   id: string;
   projectId: string;
-  type: string;
+  type: IssueType;
   title: string;
   description?: string;
-  severity: string;
-  status: string;
+  severity: IssueSeverity;
+  status: IssueStatus;
   riskScore?: number;
+  probability?: number;
+  impact?: number;
   dueDate?: string;
   project: Pick<Project, 'id' | 'code' | 'name'>;
   owner?: UserRef;
@@ -105,7 +123,7 @@ export interface DocumentRecord {
   name: string;
   description?: string;
   required: boolean;
-  status: string;
+  status: DocumentStatus;
   planTask?: { id: string; name: string };
   versions: Array<{
     id: string;
@@ -121,7 +139,7 @@ export interface PendingAction {
   id: string;
   type: string;
   payload: Record<string, unknown>;
-  status: string;
+  status: 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'EXECUTED' | 'FAILED';
   resultResourceId?: string;
 }
 export interface MessageRecord {
@@ -131,7 +149,7 @@ export interface MessageRecord {
   senderName: string;
   content: string;
   receivedAt: string;
-  status: string;
+  status: MessageStatus;
   project?: Pick<Project, 'id' | 'code' | 'name'>;
   pendingActions: PendingAction[];
   analyses?: Array<{
@@ -179,7 +197,7 @@ export interface KnowledgeArticle {
   title: string;
   summary?: string;
   content: string;
-  status: string;
+  status: KnowledgeStatus;
   tags?: string[];
   category: { id: string; name: string };
   author: UserRef;

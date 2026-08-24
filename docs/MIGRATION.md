@@ -1,6 +1,6 @@
-# V1 → V2 迁移
+# V1 → V2 迁移（历史说明）
 
-V1 功能基线记录在 `docs/V1-FEATURE-INVENTORY.md`。V2 在 `refactor/v2-production-architecture` 分支重建，不在旧 `server.js` 和单页 `index.html` 上继续堆叠。V1 文件当前只作核对材料，V2 npm scripts、Docker 与 CI 均不引用它们。
+V1 功能基线记录在 `docs/V1-FEATURE-INVENTORY.md`。V2 不在旧单体服务和单页前端上继续堆叠；V1 运行文件已从当前工作树移除，需要核对时通过 Git tag/commit 查阅。当前 npm scripts、Docker 与 CI 的唯一应用入口是 `apps/api` 与 `apps/web`。
 
 建议在隔离环境部署 V2 空库并执行 migrations/seed；编写一次性 ETL 映射 V1 用户、项目、模板、任务和文档元数据，文件复制后校验 SHA-256；核对数量、外键、权限和抽样链路后，在维护窗口做最终增量导入与切换。
 

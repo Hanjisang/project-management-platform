@@ -11,5 +11,13 @@ export const documentsApi = {
     ).data,
   review: async (id: string, status: 'APPROVED' | 'REJECTED', comment?: string) =>
     (await api.post(`/documents/${id}/reviews`, { status, comment })).data,
+  submit: async (id: string) => (await api.post(`/documents/${id}/submit`)).data,
+  addVersion: async (id: string, form: FormData) =>
+    (
+      await api.post(`/documents/${id}/versions`, form, {
+        headers: { 'content-type': 'multipart/form-data' },
+      })
+    ).data,
+  remove: async (id: string) => api.delete(`/documents/${id}`),
   downloadUrl: (versionId: string) => `/api/v2/document-versions/${versionId}/download`,
 };

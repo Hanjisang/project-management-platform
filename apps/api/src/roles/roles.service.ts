@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ALL_PERMISSIONS } from '@pmp/shared-constants';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateRoleDto, UpdateRoleDto } from './dto';
@@ -31,6 +36,13 @@ export class RolesService {
     });
   }
   async update(id: string, dto: UpdateRoleDto) {
+    const existing = await this.prisma.role.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException({ code: 'ROLE_NOT_FOUND', message: '角色不存在' });
+    if (existing.system)
+      throw new ConflictException({
+        code: 'SYSTEM_ROLE_IMMUTABLE',
+        message: '系统角色不可修改，请创建自定义角色',
+      });
     const permissions = dto.permissionCodes
       ? await this.resolvePermissions(dto.permissionCodes)
       : undefined;

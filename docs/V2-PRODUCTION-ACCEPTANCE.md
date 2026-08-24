@@ -10,9 +10,9 @@
 
 | 项目                 | 实际值                                          |
 | -------------------- | ----------------------------------------------- |
-| 测试日期             | 2026-08-23                                      |
-| 分支                 | `refactor/v2-production-architecture`           |
-| 验收前 source commit | `9063d5d10374661b3c56e7b74633ca30bdd436fc`      |
+| 测试日期             | 2026-08-24                                      |
+| 分支                 | `codex/v2-rc-hardening`                         |
+| 验收前 source commit | `42d99f02ee5854447e2a4571f404efdb6a7cb06f`      |
 | 验收基线 commit      | 本文档所在 commit；以 `git rev-parse HEAD` 为准 |
 | OS                   | Windows / Docker Desktop                        |
 | Node                 | 24.19.0                                         |
@@ -66,12 +66,29 @@ RC 终审进一步确认：单条消息只能存在一个标准分析，重复 A
 
 Fake AI 仅由测试环境显式启用；生产默认不会产生伪造分析。
 
+## 2026-08-24 RC Hardening 复验
+
+本轮基于 `main` 创建本地 `codex/v2-rc-hardening` 分支，完成 Task/Issue 状态动作、项目结项只读、业务日期、effective health、系统角色/最后管理员保护、文档审核状态机、前端 refresh single-flight、项目路由响应式、CRUD/权限 UI、分页与远程选择、共享类型契约、V1 死代码清理和 Element Plus 按需构建。
+
+| 项目                            | 结果                                          |
+| ------------------------------- | --------------------------------------------- |
+| 全新 MySQL 8.4 migration / seed | PASS                                          |
+| Unit                            | 51 passed / 0 skipped / 0 failed              |
+| Integration                     | 20 passed / 0 skipped / 0 failed              |
+| Playwright E2E                  | 11 passed / 0 skipped / 0 failed              |
+| Lint / Format / Typecheck       | PASS                                          |
+| Build                           | PASS；最大 JS chunk 143.77 kB / gzip 55.15 kB |
+| Audit                           | 0 vulnerabilities                             |
+
+候选代码已完成 Docker Compose 无缓存重建，并从空的 Compose MySQL 卷执行 2/2 migration、seed 与启动。MySQL、API、Web 均为 healthy 且 restart count 为 0；production 模式 `/health` 返回 database up、LocalStorage configured，AI/DingTalk/Zentao 未配置但不影响整体健康。通过 Web/Nginx 入口完成 Login、Me、Project/SOP/Task List、Dashboard、Logout Smoke，并在隔离的 `NODE_ENV=test + AI_FAKE_ENABLED=true` 容器配置下完成 A–G、Project Scope/Viewer 安全场景 8/8，以及桌面、375px、横屏回归 3/3。测试完成后已恢复 `NODE_ENV=production` 且关闭 Fake AI。
+
 ## Known Issues
 
 - P0：0。
 - P1：0。
-- P2：Web 主 chunk 为 894.28 kB，可后续通过进一步按需引入降低；当前不影响功能。
+- P2：当前最大 JavaScript chunk 已降至 143.77 kB；无构建体积阻塞。
 - P2：文件删除失败会持久化到 `storage_cleanup_jobs`，但自动重试 worker 未实现，需运维监控与手动重试。
+- P2：Playwright 的 Vite 开发服务器偶发报告 Element Plus `ResizeObserver loop` 浏览器警告；11 项 E2E 均通过，生产构建不受影响。
 
 ## 最终判定
 

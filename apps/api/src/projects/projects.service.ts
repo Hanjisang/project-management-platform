@@ -5,12 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, type ProjectStatus } from '@prisma/client';
-import { deriveProjectHealth } from '@pmp/shared-utils';
+import { businessToday, deriveProjectHealth } from '@pmp/shared-utils';
 import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
 import type {
   CreateProjectDto,
   ProjectListQueryDto,
+  ProjectUserOptionsQueryDto,
   SetProjectMembersDto,
   UpdateProjectDto,
 } from './dto';
@@ -22,10 +23,10 @@ export class ProjectsService {
     private readonly repository: ProjectsRepository,
     private readonly scope: ProjectScopeService,
   ) {}
-  userOptions() {
-    return this.repository.activeUserOptions();
+  userOptions(query: ProjectUserOptionsQueryDto) {
+    return this.repository.activeUserOptions(query.search, query.page, query.pageSize);
   }
-  list(user: RequestUser, query: ProjectListQueryDto) {
+  async list(user: RequestUser, query: ProjectListQueryDto) {
     const where: Prisma.ProjectWhereInput = {
       ...this.scope.where(user),
       ...(query.search
@@ -38,15 +39,23 @@ export class ProjectsService {
           }
         : {}),
       ...(query.status ? { status: query.status as ProjectStatus } : {}),
-      ...(query.health ? { health: query.health as never } : {}),
+      ...(query.health
+        ? {
+            OR: [
+              { healthOverride: query.health as never },
+              { healthOverride: null, health: query.health as never },
+            ],
+          }
+        : {}),
     };
-    return this.repository.list(where, query.page, query.pageSize);
+    const result = await this.repository.list(where, query.page, query.pageSize);
+    return { ...result, items: result.items.map((project) => this.withEffectiveHealth(project)) };
   }
   async get(user: RequestUser, id: string) {
     await this.scope.assert(user, id);
     const project = await this.repository.find(id);
     if (!project) throw this.notFound();
-    return project;
+    return this.withEffectiveHealth(project);
   }
   async create(dto: CreateProjectDto) {
     if (
@@ -75,6 +84,19 @@ export class ProjectsService {
     await this.scope.assert(user, id);
     const existing = await this.repository.find(id);
     if (!existing) throw this.notFound();
+    if (['COMPLETED', 'CANCELLED'].includes(existing.status))
+      throw new ConflictException({
+        code: 'PROJECT_READ_ONLY',
+        message: '已结项或已取消的项目不允许修改',
+        details: { status: existing.status },
+      });
+    const finalStart = dto.plannedStartDate ?? existing.plannedStartDate;
+    const finalGoLive = dto.plannedGoLiveDate ?? existing.plannedGoLiveDate;
+    if (finalStart && finalGoLive && finalStart > finalGoLive)
+      throw new BadRequestException({
+        code: 'PROJECT_DATE_INVALID',
+        message: '计划开始日期不能晚于上线日期',
+      });
     if (
       dto.managerUserId &&
       !existing.members.some((member) => member.userId === dto.managerUserId)
@@ -83,15 +105,17 @@ export class ProjectsService {
         code: 'MANAGER_MUST_BE_MEMBER',
         message: '新负责人必须先加入项目成员',
       });
-    return this.repository.update(id, {
-      name: dto.name,
-      customerName: dto.customerName,
-      description: dto.description,
-      plannedStartDate: dto.plannedStartDate,
-      plannedGoLiveDate: dto.plannedGoLiveDate,
-      healthOverride: dto.healthOverride,
-      manager: dto.managerUserId ? { connect: { id: dto.managerUserId } } : undefined,
-    });
+    return this.withEffectiveHealth(
+      await this.repository.update(id, {
+        name: dto.name,
+        customerName: dto.customerName,
+        description: dto.description,
+        plannedStartDate: dto.plannedStartDate,
+        plannedGoLiveDate: dto.plannedGoLiveDate,
+        healthOverride: dto.healthOverride,
+        manager: dto.managerUserId ? { connect: { id: dto.managerUserId } } : undefined,
+      }),
+    );
   }
   async start(user: RequestUser, id: string) {
     const project = await this.get(user, id);
@@ -145,6 +169,12 @@ export class ProjectsService {
     await this.scope.assert(user, id);
     const project = await this.repository.find(id);
     if (!project) throw this.notFound();
+    if (['COMPLETED', 'CANCELLED'].includes(project.status))
+      throw new ConflictException({
+        code: 'PROJECT_READ_ONLY',
+        message: '已结项或已取消的项目不允许修改成员',
+        details: { status: project.status },
+      });
     const duplicate =
       dto.members.length !== new Set(dto.members.map((member) => member.userId)).size;
     if (duplicate)
@@ -162,7 +192,11 @@ export class ProjectsService {
     const prisma = this.repository.prismaClient();
     const [overdueTaskCount, criticalIssueCount, highIssueCount, risk] = await Promise.all([
       prisma.task.count({
-        where: { projectId, dueDate: { lt: new Date() }, status: { notIn: ['DONE', 'CANCELLED'] } },
+        where: {
+          projectId,
+          dueDate: { lt: businessToday() },
+          status: { notIn: ['DONE', 'CANCELLED'] },
+        },
       }),
       prisma.issue.count({
         where: { projectId, severity: 'CRITICAL', status: { notIn: ['RESOLVED', 'CLOSED'] } },
@@ -187,6 +221,13 @@ export class ProjectsService {
   }
   private notFound() {
     return new NotFoundException({ code: 'PROJECT_NOT_FOUND', message: '项目不存在' });
+  }
+  private withEffectiveHealth<T extends { health: string; healthOverride?: string | null }>(
+    project: T,
+  ): T & { derivedHealth: string; effectiveHealth: string } {
+    const derivedHealth = project.health;
+    const effectiveHealth = project.healthOverride ?? derivedHealth;
+    return { ...project, health: effectiveHealth, derivedHealth, effectiveHealth };
   }
   private invalidTransition(from: string, to: string) {
     return new ConflictException({

@@ -1,19 +1,26 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
 import { projectsApi } from '../../api/projects.api';
 import PageHeader from '../../components/PageHeader.vue';
 import StatusTag from '../../components/StatusTag.vue';
+import RemoteProjectSelect from '../../components/RemoteProjectSelect.vue';
+import { projectQueryKey } from '../../composables/project-query';
+import { ApiError } from '../../api/client';
 const projectId = ref('');
-const projects = useQuery({
-  queryKey: ['projects', 'plan-selector'],
-  queryFn: () => projectsApi.list({ pageSize: 100 }),
-});
 const plan = useQuery({
-  queryKey: ['plan', projectId],
+  queryKey: projectQueryKey('plan', projectId),
   queryFn: () => projectsApi.plan(projectId.value),
   enabled: () => Boolean(projectId.value),
   retry: false,
+});
+const planMissing = computed(
+  () => plan.error.value instanceof ApiError && plan.error.value.code === 'PROJECT_PLAN_NOT_FOUND',
+);
+const planErrorTitle = computed(() => {
+  if (plan.error.value instanceof ApiError && plan.error.value.status === 403)
+    return '无权查看该项目计划';
+  return '实施计划加载失败';
 });
 </script>
 <template>
@@ -23,20 +30,14 @@ const plan = useQuery({
       description="项目计划是 SOP 版本的独立快照，检查项完成度逐层汇总进度"
     />
     <div class="filters">
-      <el-select
+      <RemoteProjectSelect
         v-model="projectId"
-        filterable
         placeholder="选择项目"
         style="width: min(420px, 100%)"
-        ><el-option
-          v-for="project in projects.data.value?.items ?? []"
-          :key="project.id"
-          :label="`${project.code} · ${project.name}`"
-          :value="project.id"
-      /></el-select>
+      />
     </div>
     <el-empty v-if="!projectId" description="请先选择项目" /><el-result
-      v-else-if="plan.isError.value"
+      v-else-if="plan.isError.value && planMissing"
       icon="info"
       title="该项目尚未生成实施计划"
       ><template #extra
@@ -45,6 +46,11 @@ const plan = useQuery({
         ></template
       ></el-result
     >
+    <el-result v-else-if="plan.isError.value" icon="error" :title="planErrorTitle">
+      <template #extra>
+        <el-button type="primary" @click="plan.refetch()">重试</el-button>
+      </template>
+    </el-result>
     <div v-else-if="plan.data.value" class="panel">
       <div class="panel-header">
         <div>

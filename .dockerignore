@@ -1,7 +1,16 @@
 node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/coverage
+**/playwright-report
+**/test-results
 .env
 .env.deploy
 data
+storage
+.tmp
+outputs
 npm-debug.log
 .git
 .github

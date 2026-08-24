@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { addBusinessDays, businessToday } from '@pmp/shared-utils';
 import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -18,6 +19,7 @@ export class DashboardService {
         name: true,
         status: true,
         health: true,
+        healthOverride: true,
         progress: true,
         plannedGoLiveDate: true,
         plans: {
@@ -28,10 +30,16 @@ export class DashboardService {
       },
     });
     const projectIds = projects.map((project) => project.id);
-    const today = new Date();
-    const upcoming = new Date(today);
-    upcoming.setUTCDate(upcoming.getUTCDate() + 30);
-    const [overdueTasks, highRiskIssues, pendingMessages, taskLoads] = await Promise.all([
+    const today = businessToday();
+    const upcoming = addBusinessDays(today, 30);
+    const [
+      overdueTasks,
+      overdueTaskCount,
+      highRiskIssues,
+      highRiskIssueCount,
+      pendingMessages,
+      taskLoads,
+    ] = await Promise.all([
       this.prisma.task.findMany({
         where: {
           projectId: { in: projectIds },
@@ -45,6 +53,13 @@ export class DashboardService {
         orderBy: { dueDate: 'asc' },
         take: 20,
       }),
+      this.prisma.task.count({
+        where: {
+          projectId: { in: projectIds },
+          dueDate: { lt: today },
+          status: { notIn: ['DONE', 'CANCELLED'] },
+        },
+      }),
       this.prisma.issue.findMany({
         where: {
           projectId: { in: projectIds },
@@ -54,6 +69,13 @@ export class DashboardService {
         include: { project: { select: { id: true, name: true } } },
         orderBy: [{ riskScore: 'desc' }, { createdAt: 'desc' }],
         take: 20,
+      }),
+      this.prisma.issue.count({
+        where: {
+          projectId: { in: projectIds },
+          severity: { in: ['HIGH', 'CRITICAL'] },
+          status: { notIn: ['RESOLVED', 'CLOSED'] },
+        },
       }),
       this.prisma.message.count({
         where: { projectId: { in: projectIds }, status: 'PENDING_CONFIRMATION' },
@@ -81,8 +103,11 @@ export class DashboardService {
         (project.status === 'COMPLETED' ? '已结项' : '未生成计划');
       stageDistribution.set(stage, (stageDistribution.get(stage) ?? 0) + 1);
     }
-    const healthCounts = { NORMAL: 0, WARNING: 0, HIGH_RISK: 0 };
-    for (const project of projects) healthCounts[project.health] += 1;
+    const healthCounts: Record<string, number> = { NORMAL: 0, WARNING: 0, HIGH_RISK: 0 };
+    for (const project of projects) {
+      const health = this.effectiveHealth(project);
+      healthCounts[health] = (healthCounts[health] ?? 0) + 1;
+    }
     return {
       summary: {
         projectCount: projects.length,
@@ -99,8 +124,8 @@ export class DashboardService {
             item.plannedGoLiveDate >= today &&
             item.plannedGoLiveDate <= upcoming,
         ).length,
-        overdueTaskCount: overdueTasks.length,
-        highRiskIssueCount: highRiskIssues.length,
+        overdueTaskCount,
+        highRiskIssueCount,
         pendingMessageCount: pendingMessages,
       },
       upcomingProjects: projects
@@ -119,7 +144,8 @@ export class DashboardService {
       riskRanking: [...projects]
         .sort(
           (a, b) =>
-            this.healthRank(b.health) - this.healthRank(a.health) || a.progress - b.progress,
+            this.healthRank(this.effectiveHealth(b)) - this.healthRank(this.effectiveHealth(a)) ||
+            a.progress - b.progress,
         )
         .slice(0, 10)
         .map((project) => this.projectSummary(project)),
@@ -147,6 +173,7 @@ export class DashboardService {
     name: string;
     status: string;
     health: string;
+    healthOverride?: string | null;
     progress: number;
     plannedGoLiveDate: Date | null;
   }) {
@@ -155,9 +182,14 @@ export class DashboardService {
       code: project.code,
       name: project.name,
       status: project.status,
-      health: project.health,
+      health: this.effectiveHealth(project),
+      derivedHealth: project.health,
+      effectiveHealth: this.effectiveHealth(project),
       progress: project.progress,
       plannedGoLiveDate: project.plannedGoLiveDate,
     };
+  }
+  private effectiveHealth(project: { health: string; healthOverride?: string | null }): string {
+    return project.healthOverride ?? project.health;
   }
 }

@@ -52,6 +52,7 @@ describe('DocumentsService storage consistency', () => {
   it('records a cleanup job when database deletion succeeds but file deletion fails', async () => {
     const cleanup = vi.fn().mockResolvedValue({});
     const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'project-id', status: 'ACTIVE' }]),
       documentVersion: {
         findMany: vi.fn().mockResolvedValue([{ objectKey: '2026/orphan.txt' }]),
       },
@@ -84,6 +85,51 @@ describe('DocumentsService storage consistency', () => {
         lastError: 'storage unavailable',
       }),
       update: expect.objectContaining({ lastError: 'storage unavailable' }),
+    });
+  });
+
+  it('does not allow DRAFT documents to be reviewed directly', async () => {
+    const prisma = {
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document-id',
+          projectId: 'project-id',
+          status: 'DRAFT',
+        }),
+      },
+    } as unknown as PrismaService;
+    const scope = { assert: vi.fn() } as unknown as ProjectScopeService;
+    const storage = {} as StorageProvider;
+    await expect(
+      new DocumentsService(prisma, scope, storage).review(user, 'document-id', {
+        status: 'APPROVED',
+      }),
+    ).rejects.toMatchObject({ response: { code: 'DOCUMENT_REVIEW_STATE_INVALID' } });
+  });
+
+  it('submits DRAFT to PENDING_REVIEW inside the project write guard', async () => {
+    const update = vi.fn().mockResolvedValue({ id: 'document-id', status: 'PENDING_REVIEW' });
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'project-id', status: 'ACTIVE' }]),
+      document: { update },
+    };
+    const prisma = {
+      document: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'document-id',
+          projectId: 'project-id',
+          status: 'DRAFT',
+        }),
+      },
+      $transaction: vi
+        .fn()
+        .mockImplementation((callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaService;
+    const scope = { assert: vi.fn() } as unknown as ProjectScopeService;
+    await new DocumentsService(prisma, scope, {} as StorageProvider).submit(user, 'document-id');
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'document-id' },
+      data: { status: 'PENDING_REVIEW' },
     });
   });
 });

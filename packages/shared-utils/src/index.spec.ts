@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addBusinessDays,
+  businessDayEndInstant,
+  businessDayStartInstant,
+  businessToday,
   calculateChecklistProgress,
   calculateRiskScore,
   calculateWeightedProgress,
@@ -67,5 +71,15 @@ describe('domain calculations', () => {
         maxRiskScore: 20,
       }),
     ).toBe('HIGH_RISK');
+  });
+  it('uses the Asia/Shanghai business day for DATE comparisons', () => {
+    const beforeMidnightUtc = new Date('2026-08-23T15:59:59.999Z');
+    const afterMidnightShanghai = new Date('2026-08-23T16:00:00.000Z');
+    expect(businessToday(beforeMidnightUtc).toISOString()).toBe('2026-08-23T00:00:00.000Z');
+    const today = businessToday(afterMidnightShanghai);
+    expect(today.toISOString()).toBe('2026-08-24T00:00:00.000Z');
+    expect(addBusinessDays(today, 1).toISOString()).toBe('2026-08-25T00:00:00.000Z');
+    expect(businessDayStartInstant(today).toISOString()).toBe('2026-08-23T16:00:00.000Z');
+    expect(businessDayEndInstant(today).toISOString()).toBe('2026-08-24T15:59:59.999Z');
   });
 });
