@@ -127,18 +127,33 @@ test('I — implementation plan edits the same WorkItem owner and schedule direc
   const task = page.locator('.plan-task').filter({ hasText: 'Parity 计划任务' });
   await task.getByRole('button', { name: '编辑计划' }).click();
   const dialog = page.getByRole('dialog', { name: '编辑任务计划' });
-  await dialog
+  const startInput = dialog
     .locator('.el-form-item')
     .filter({ hasText: '计划开始' })
-    .locator('input')
-    .fill('2026-02-01');
-  await dialog
+    .locator('input');
+  const endInput = dialog
     .locator('.el-form-item')
     .filter({ hasText: '计划结束' })
-    .locator('input')
-    .fill('2026-02-10');
-  await page.keyboard.press('Escape');
+    .locator('input');
+  await startInput.fill('2026-02-01');
+  await startInput.press('Enter');
+  await endInput.fill('2026-02-10');
+  await endInput.press('Enter');
+
+  const updated = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/api/v2/work-items/${workItemId}`) &&
+      response.request().method() === 'PATCH',
+  );
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  const updateResponse = await updated;
+  expect(updateResponse.ok()).toBe(true);
+  expect(updateResponse.request().postDataJSON()).toEqual(
+    expect.objectContaining({
+      plannedStartDate: '2026-02-01',
+      plannedEndDate: '2026-02-10',
+    }),
+  );
   await expect(task).toContainText('2026-02-01 至 2026-02-10');
 
   await page.goto('/tasks');
