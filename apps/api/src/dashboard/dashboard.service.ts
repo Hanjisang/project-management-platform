@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { addBusinessDays, businessToday } from '@pmp/shared-utils';
 import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
@@ -38,10 +39,10 @@ export class DashboardService {
     const projectIds = projects.map((project) => project.id);
     const today = businessToday();
     const upcoming = addBusinessDays(today, 30);
-    const highRiskWhere = {
+    const highRiskWhere: Prisma.IssueWhereInput = {
       projectId: { in: projectIds },
-      severity: { in: ['HIGH', 'CRITICAL'] as const },
-      status: { notIn: ['RESOLVED', 'CLOSED'] as const },
+      severity: { in: ['HIGH', 'CRITICAL'] },
+      status: { notIn: ['RESOLVED', 'CLOSED'] },
     };
 
     const [
