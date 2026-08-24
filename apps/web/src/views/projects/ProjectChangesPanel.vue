@@ -7,7 +7,12 @@ import { projectChangesApi } from '../../api/project-changes.api';
 import { projectsApi } from '../../api/projects.api';
 import { useAuthStore } from '../../stores/auth';
 import StatusTag from '../../components/StatusTag.vue';
-import type { PlanStage, ProjectChangeRequest, ProjectDeliverable, ProjectWorkItem } from '../../types/domain';
+import type {
+  PlanStage,
+  ProjectChangeRequest,
+  ProjectDeliverable,
+  ProjectWorkItem,
+} from '../../types/domain';
 
 const props = defineProps<{ projectId: string }>();
 const projectId = toRef(props, 'projectId');
@@ -35,6 +40,7 @@ type OperationType =
   | 'ADD_DELIVERABLE'
   | 'CANCEL_DELIVERABLE'
   | 'CHANGE_ACCEPTANCE_CRITERIA';
+type ApiOperationType = OperationType | 'PROJECT_COMPLETION_DATE_CHANGE';
 type CriterionDraft = {
   id?: string;
   name: string;
@@ -49,6 +55,11 @@ type DraftOperation = {
   payload: Record<string, unknown>;
   label: string;
   criteria?: CriterionDraft[];
+};
+type ApiOperation = {
+  operationType: ApiOperationType;
+  entityId?: string;
+  payload: Record<string, unknown>;
 };
 
 const operationType = ref<OperationType>('ADD_WORK_ITEM');
@@ -124,12 +135,18 @@ function loadCriteria(deliverableId: string): void {
 function addCriterion(): void {
   criteriaDraft.value.push({ name: '', required: true, weight: 0 });
 }
+function warn(message: string): void {
+  ElMessage.warning(message);
+}
 function addOperation(): void {
   const key = `${Date.now()}-${Math.random()}`;
   const type = operationType.value;
   let operation: DraftOperation | undefined;
   if (type === 'ADD_STAGE') {
-    if (!operationName.value.trim()) return ElMessage.warning('请输入阶段名称');
+    if (!operationName.value.trim()) {
+      warn('请输入阶段名称');
+      return;
+    }
     operation = {
       key,
       operationType: type,
@@ -138,11 +155,23 @@ function addOperation(): void {
     };
   } else if (type === 'CANCEL_STAGE') {
     const stage = stages.value.find((item) => item.id === targetStageId.value);
-    if (!stage) return ElMessage.warning('请选择阶段');
-    operation = { key, operationType: type, entityId: stage.id, payload: {}, label: `取消阶段：${stage.name}` };
+    if (!stage) {
+      warn('请选择阶段');
+      return;
+    }
+    operation = {
+      key,
+      operationType: type,
+      entityId: stage.id,
+      payload: {},
+      label: `取消阶段：${stage.name}`,
+    };
   } else if (type === 'ADD_WORK_ITEM') {
     const stage = stages.value.find((item) => item.id === targetStageId.value);
-    if (!stage || !operationName.value.trim()) return ElMessage.warning('请选择阶段并填写任务名称');
+    if (!stage || !operationName.value.trim()) {
+      warn('请选择阶段并填写任务名称');
+      return;
+    }
     operation = {
       key,
       operationType: type,
@@ -155,24 +184,52 @@ function addOperation(): void {
     };
   } else if (type === 'CANCEL_WORK_ITEM') {
     const item = workItems.value.find((entry) => entry.id === targetWorkItemId.value);
-    if (!item) return ElMessage.warning('请选择任务');
-    operation = { key, operationType: type, entityId: item.id, payload: {}, label: `取消任务：${item.name}` };
-  } else if (type === 'ADD_CHECKLIST') {
-    const item = workItems.value.find((entry) => entry.id === targetWorkItemId.value);
-    if (!item || !operationName.value.trim()) return ElMessage.warning('请选择任务并填写检查项名称');
+    if (!item) {
+      warn('请选择任务');
+      return;
+    }
     operation = {
       key,
       operationType: type,
-      payload: { workItemId: item.id, name: operationName.value.trim(), required: operationRequired.value },
+      entityId: item.id,
+      payload: {},
+      label: `取消任务：${item.name}`,
+    };
+  } else if (type === 'ADD_CHECKLIST') {
+    const item = workItems.value.find((entry) => entry.id === targetWorkItemId.value);
+    if (!item || !operationName.value.trim()) {
+      warn('请选择任务并填写检查项名称');
+      return;
+    }
+    operation = {
+      key,
+      operationType: type,
+      payload: {
+        workItemId: item.id,
+        name: operationName.value.trim(),
+        required: operationRequired.value,
+      },
       label: `新增检查项：${item.name} / ${operationName.value.trim()}`,
     };
   } else if (type === 'CANCEL_CHECKLIST') {
     const item = checklistItems.value.find((entry) => entry.id === targetChecklistId.value);
-    if (!item) return ElMessage.warning('请选择检查项');
-    operation = { key, operationType: type, entityId: item.id, payload: {}, label: `取消检查项：${item.workItemName} / ${item.name}` };
+    if (!item) {
+      warn('请选择检查项');
+      return;
+    }
+    operation = {
+      key,
+      operationType: type,
+      entityId: item.id,
+      payload: {},
+      label: `取消检查项：${item.workItemName} / ${item.name}`,
+    };
   } else if (type === 'ADD_DELIVERABLE') {
     const item = workItems.value.find((entry) => entry.id === targetWorkItemId.value);
-    if (!item || !operationName.value.trim()) return ElMessage.warning('请选择任务并填写交付物名称');
+    if (!item || !operationName.value.trim()) {
+      warn('请选择任务并填写交付物名称');
+      return;
+    }
     operation = {
       key,
       operationType: type,
@@ -186,12 +243,24 @@ function addOperation(): void {
     };
   } else if (type === 'CANCEL_DELIVERABLE') {
     const item = deliverables.value.find((entry) => entry.id === targetDeliverableId.value);
-    if (!item) return ElMessage.warning('请选择交付物');
-    operation = { key, operationType: type, entityId: item.id, payload: {}, label: `取消交付物：${item.workItemName} / ${item.name}` };
+    if (!item) {
+      warn('请选择交付物');
+      return;
+    }
+    operation = {
+      key,
+      operationType: type,
+      entityId: item.id,
+      payload: {},
+      label: `取消交付物：${item.workItemName} / ${item.name}`,
+    };
   } else if (type === 'CHANGE_ACCEPTANCE_CRITERIA') {
     const item = deliverables.value.find((entry) => entry.id === targetDeliverableId.value);
     const criteria = criteriaDraft.value.filter((criterion) => criterion.name.trim());
-    if (!item || !criteria.length) return ElMessage.warning('请选择交付物并至少保留一条验收标准');
+    if (!item || !criteria.length) {
+      warn('请选择交付物并至少保留一条验收标准');
+      return;
+    }
     operation = {
       key,
       operationType: type,
@@ -227,8 +296,8 @@ async function saveAdjustment(): Promise<void> {
     invalidateProjectExecution(),
   ]);
 }
-function apiOperations() {
-  const structural = operations.value.map((operation) => ({
+function apiOperations(): ApiOperation[] {
+  const structural: ApiOperation[] = operations.value.map((operation) => ({
     operationType: operation.operationType,
     entityId: operation.entityId,
     payload:
@@ -243,7 +312,7 @@ function apiOperations() {
   }));
   if (form.proposedCompletionDate)
     structural.unshift({
-      operationType: 'PROJECT_COMPLETION_DATE_CHANGE' as OperationType | 'PROJECT_COMPLETION_DATE_CHANGE',
+      operationType: 'PROJECT_COMPLETION_DATE_CHANGE',
       entityId: undefined,
       payload: { plannedCompletionDate: form.proposedCompletionDate },
     });
@@ -301,28 +370,44 @@ function ruleImpact(value?: string | null): Record<string, unknown> | null {
     return { summary: value };
   }
 }
-function describeOperation(operation: { operationType: string; entityId?: string; payload: Record<string, unknown> }): string[] {
+function describeOperation(operation: {
+  operationType: string;
+  entityId?: string;
+  payload: Record<string, unknown>;
+}): string[] {
   const payload = operation.payload ?? {};
   if (operation.operationType === 'PROJECT_COMPLETION_DATE_CHANGE')
     return [`项目完成日期调整为 ${String(payload.plannedCompletionDate ?? '-')}`];
   if (operation.operationType === 'ADD_STAGE') return [`新增阶段：${String(payload.name ?? '-')}`];
   if (operation.operationType === 'ADD_WORK_ITEM') return [`新增任务：${String(payload.name ?? '-')}`];
-  if (operation.operationType === 'ADD_CHECKLIST') return [`新增检查项：${String(payload.name ?? '-')}`];
-  if (operation.operationType === 'ADD_DELIVERABLE') return [`新增交付物：${String(payload.name ?? '-')}`];
+  if (operation.operationType === 'ADD_CHECKLIST')
+    return [`新增检查项：${String(payload.name ?? '-')}`];
+  if (operation.operationType === 'ADD_DELIVERABLE')
+    return [`新增交付物：${String(payload.name ?? '-')}`];
   if (operation.operationType === 'CANCEL_STAGE')
-    return [`取消阶段：${stages.value.find((item) => item.id === operation.entityId)?.name ?? operation.entityId ?? '-'}`];
+    return [
+      `取消阶段：${stages.value.find((item) => item.id === operation.entityId)?.name ?? operation.entityId ?? '-'}`,
+    ];
   if (operation.operationType === 'CANCEL_WORK_ITEM')
-    return [`取消任务：${workItems.value.find((item) => item.id === operation.entityId)?.name ?? operation.entityId ?? '-'}`];
+    return [
+      `取消任务：${workItems.value.find((item) => item.id === operation.entityId)?.name ?? operation.entityId ?? '-'}`,
+    ];
   if (operation.operationType === 'CANCEL_CHECKLIST')
-    return [`取消检查项：${checklistItems.value.find((item) => item.id === operation.entityId)?.name ?? operation.entityId ?? '-'}`];
+    return [
+      `取消检查项：${checklistItems.value.find((item) => item.id === operation.entityId)?.name ?? operation.entityId ?? '-'}`,
+    ];
   if (operation.operationType === 'CANCEL_DELIVERABLE')
-    return [`取消交付物：${deliverables.value.find((item) => item.id === operation.entityId)?.name ?? operation.entityId ?? '-'}`];
+    return [
+      `取消交付物：${deliverables.value.find((item) => item.id === operation.entityId)?.name ?? operation.entityId ?? '-'}`,
+    ];
   if (operation.operationType === 'CHANGE_ACCEPTANCE_CRITERIA') {
     try {
       const value = JSON.parse(String(payload.reason ?? '{}')) as { criteria?: CriterionDraft[] };
       return [
         `调整验收标准：${deliverables.value.find((item) => item.id === operation.entityId)?.name ?? operation.entityId ?? '-'}`,
-        ...(value.criteria ?? []).map((criterion) => `• ${criterion.name}${criterion.required ? '（必需）' : ''}`),
+        ...(value.criteria ?? []).map(
+          (criterion) => `• ${criterion.name}${criterion.required ? '（必需）' : ''}`,
+        ),
       ];
     } catch {
       return ['调整验收标准'];
@@ -335,8 +420,17 @@ function describeOperation(operation: { operationType: string; entityId?: string
 <template>
   <div class="changes-panel">
     <div class="toolbar-actions">
-      <el-button v-if="auth.has(PERMISSIONS.PROJECT_CHANGE_CREATE)" @click="adjustmentDialog = true">直接调整</el-button>
-      <el-button v-if="auth.has(PERMISSIONS.PROJECT_CHANGE_CREATE)" type="primary" @click="openChange">创建项目变更</el-button>
+      <el-button
+        v-if="auth.has(PERMISSIONS.PROJECT_CHANGE_CREATE)"
+        @click="adjustmentDialog = true"
+        >直接调整</el-button
+      >
+      <el-button
+        v-if="auth.has(PERMISSIONS.PROJECT_CHANGE_CREATE)"
+        type="primary"
+        @click="openChange"
+        >创建项目变更</el-button
+      >
     </div>
     <el-table :data="changes.data.value ?? []" v-loading="changes.isLoading.value">
       <el-table-column prop="code" label="编号" width="110" />
@@ -344,16 +438,53 @@ function describeOperation(operation: { operationType: string; entityId?: string
       <el-table-column prop="changeType" label="类型" width="110" />
       <el-table-column prop="requestedBy.displayName" label="申请人" width="110" />
       <el-table-column prop="approver.displayName" label="审批人" width="110" />
-      <el-table-column label="状态" width="130"><template #default="scope"><StatusTag :value="scope.row.status" /></template></el-table-column>
-      <el-table-column label="操作" min-width="260"><template #default="scope">
-        <el-button link @click="showDetail(scope.row.id)">查看影响 / Diff</el-button>
-        <el-button v-if="scope.row.status === 'DRAFT' && auth.has(PERMISSIONS.PROJECT_CHANGE_CREATE)" link type="primary" @click="act(scope.row.id, 'submit')">提交</el-button>
-        <el-button v-if="scope.row.status === 'PENDING_APPROVAL' && auth.has(PERMISSIONS.PROJECT_CHANGE_APPROVE)" link type="success" @click="act(scope.row.id, 'approve')">批准</el-button>
-        <el-button v-if="scope.row.status === 'PENDING_APPROVAL' && auth.has(PERMISSIONS.PROJECT_CHANGE_APPROVE)" link type="danger" @click="act(scope.row.id, 'reject')">驳回</el-button>
-        <el-button v-if="scope.row.status === 'APPROVED' && auth.has(PERMISSIONS.PROJECT_CHANGE_APPLY)" link type="primary" @click="act(scope.row.id, 'apply')">应用</el-button>
-      </template></el-table-column>
+      <el-table-column label="状态" width="130"
+        ><template #default="scope"><StatusTag :value="scope.row.status" /></template
+      ></el-table-column>
+      <el-table-column label="操作" min-width="260"
+        ><template #default="scope">
+          <el-button link @click="showDetail(scope.row.id)">查看影响 / Diff</el-button>
+          <el-button
+            v-if="scope.row.status === 'DRAFT' && auth.has(PERMISSIONS.PROJECT_CHANGE_CREATE)"
+            link
+            type="primary"
+            @click="act(scope.row.id, 'submit')"
+            >提交</el-button
+          >
+          <el-button
+            v-if="
+              scope.row.status === 'PENDING_APPROVAL' &&
+              auth.has(PERMISSIONS.PROJECT_CHANGE_APPROVE)
+            "
+            link
+            type="success"
+            @click="act(scope.row.id, 'approve')"
+            >批准</el-button
+          >
+          <el-button
+            v-if="
+              scope.row.status === 'PENDING_APPROVAL' &&
+              auth.has(PERMISSIONS.PROJECT_CHANGE_APPROVE)
+            "
+            link
+            type="danger"
+            @click="act(scope.row.id, 'reject')"
+            >驳回</el-button
+          >
+          <el-button
+            v-if="scope.row.status === 'APPROVED' && auth.has(PERMISSIONS.PROJECT_CHANGE_APPLY)"
+            link
+            type="primary"
+            @click="act(scope.row.id, 'apply')"
+            >应用</el-button
+          >
+        </template></el-table-column
+      >
     </el-table>
-    <el-empty v-if="!changes.isLoading.value && !changes.data.value?.length" description="暂无项目变更" />
+    <el-empty
+      v-if="!changes.isLoading.value && !changes.data.value?.length"
+      description="暂无项目变更"
+    />
 
     <el-dialog v-model="detailDialog" title="项目变更影响与 Diff" width="min(760px, 96vw)">
       <template v-if="detail">
@@ -382,17 +513,42 @@ function describeOperation(operation: { operationType: string; entityId?: string
     </el-dialog>
 
     <el-dialog v-model="adjustmentDialog" title="一般计划调整" width="min(520px, 94vw)">
-      <el-alert title="系统始终相对最近批准基线计算；±20%（含边界）可直接生效，且会通知审批人并留档。" type="info" :closable="false" />
+      <el-alert
+        title="系统始终相对最近批准基线计算；±20%（含边界）可直接生效，且会通知审批人并留档。"
+        type="info"
+        :closable="false"
+      />
       <el-form label-position="top" style="margin-top: 16px">
         <el-form-item label="新的项目完成日期" required>
-          <el-date-picker v-model="form.proposedCompletionDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" @change="classify(false)" />
+          <el-date-picker
+            v-model="form.proposedCompletionDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+            @change="classify(false)"
+          />
         </el-form-item>
-        <el-form-item label="调整原因" required><el-input v-model="form.reason" type="textarea" /></el-form-item>
-        <el-tag v-if="impact" :type="impact.classification === 'DIRECT_ADJUSTMENT' ? 'success' : 'danger'">{{ impact.classification }} · {{ impact.changeRate }}%</el-tag>
+        <el-form-item label="调整原因" required
+          ><el-input v-model="form.reason" type="textarea"
+        /></el-form-item>
+        <el-tag
+          v-if="impact"
+          :type="impact.classification === 'DIRECT_ADJUSTMENT' ? 'success' : 'danger'"
+          >{{ impact.classification }} · {{ impact.changeRate }}%</el-tag
+        >
       </el-form>
       <template #footer>
         <el-button @click="adjustmentDialog = false">取消</el-button>
-        <el-button type="primary" :disabled="!form.proposedCompletionDate || !form.reason || impact?.classification !== 'DIRECT_ADJUSTMENT'" @click="saveAdjustment">直接生效</el-button>
+        <el-button
+          type="primary"
+          :disabled="
+            !form.proposedCompletionDate ||
+            !form.reason ||
+            impact?.classification !== 'DIRECT_ADJUSTMENT'
+          "
+          @click="saveAdjustment"
+          >直接生效</el-button
+        >
       </template>
     </el-dialog>
 
@@ -400,13 +556,26 @@ function describeOperation(operation: { operationType: string; entityId?: string
       <el-form label-position="top">
         <div class="content-grid">
           <el-form-item label="标题" required><el-input v-model="form.title" /></el-form-item>
-          <el-form-item label="拟议完成日期"><el-date-picker v-model="form.proposedCompletionDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item>
+          <el-form-item label="拟议完成日期"
+            ><el-date-picker
+              v-model="form.proposedCompletionDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              style="width: 100%"
+          /></el-form-item>
         </div>
-        <el-form-item label="变更说明" required><el-input v-model="form.description" type="textarea" :rows="2" /></el-form-item>
-        <el-form-item label="原因" required><el-input v-model="form.reason" type="textarea" :rows="2" /></el-form-item>
+        <el-form-item label="变更说明" required
+          ><el-input v-model="form.description" type="textarea" :rows="2"
+        /></el-form-item>
+        <el-form-item label="原因" required
+          ><el-input v-model="form.reason" type="textarea" :rows="2"
+        /></el-form-item>
 
         <section class="operation-builder">
-          <div class="section-head"><strong>结构化变更项</strong><span class="muted">范围变化会自动进入审批，不由用户手工判断</span></div>
+          <div class="section-head">
+            <strong>结构化变更项</strong
+            ><span class="muted">范围变化会自动进入审批，不由用户手工判断</span>
+          </div>
           <el-select v-model="operationType" style="width: 220px" @change="resetOperationEditor">
             <el-option label="新增阶段" value="ADD_STAGE" />
             <el-option label="取消阶段" value="CANCEL_STAGE" />
@@ -420,28 +589,96 @@ function describeOperation(operation: { operationType: string; entityId?: string
           </el-select>
 
           <div class="operation-fields">
-            <el-select v-if="['CANCEL_STAGE', 'ADD_WORK_ITEM'].includes(operationType)" v-model="targetStageId" placeholder="选择阶段" filterable>
-              <el-option v-for="stage in stages" :key="stage.id" :label="stage.name" :value="stage.id" />
+            <el-select
+              v-if="['CANCEL_STAGE', 'ADD_WORK_ITEM'].includes(operationType)"
+              v-model="targetStageId"
+              placeholder="选择阶段"
+              filterable
+            >
+              <el-option
+                v-for="stage in stages"
+                :key="stage.id"
+                :label="stage.name"
+                :value="stage.id"
+              />
             </el-select>
-            <el-select v-if="['CANCEL_WORK_ITEM', 'ADD_CHECKLIST', 'ADD_DELIVERABLE'].includes(operationType)" v-model="targetWorkItemId" placeholder="选择任务" filterable>
-              <el-option v-for="item in workItems" :key="item.id" :label="`${item.stage?.name ?? '-'} / ${item.name}`" :value="item.id" />
+            <el-select
+              v-if="
+                ['CANCEL_WORK_ITEM', 'ADD_CHECKLIST', 'ADD_DELIVERABLE'].includes(operationType)
+              "
+              v-model="targetWorkItemId"
+              placeholder="选择任务"
+              filterable
+            >
+              <el-option
+                v-for="item in workItems"
+                :key="item.id"
+                :label="`${item.stage?.name ?? '-'} / ${item.name}`"
+                :value="item.id"
+              />
             </el-select>
-            <el-select v-if="operationType === 'CANCEL_CHECKLIST'" v-model="targetChecklistId" placeholder="选择检查项" filterable>
-              <el-option v-for="item in checklistItems" :key="item.id" :label="`${item.workItemName} / ${item.name}`" :value="item.id" />
+            <el-select
+              v-if="operationType === 'CANCEL_CHECKLIST'"
+              v-model="targetChecklistId"
+              placeholder="选择检查项"
+              filterable
+            >
+              <el-option
+                v-for="item in checklistItems"
+                :key="item.id"
+                :label="`${item.workItemName} / ${item.name}`"
+                :value="item.id"
+              />
             </el-select>
-            <el-select v-if="['CANCEL_DELIVERABLE', 'CHANGE_ACCEPTANCE_CRITERIA'].includes(operationType)" v-model="targetDeliverableId" placeholder="选择交付物" filterable @change="operationType === 'CHANGE_ACCEPTANCE_CRITERIA' && loadCriteria(String($event))">
-              <el-option v-for="item in deliverables" :key="item.id" :label="`${item.workItemName} / ${item.name}`" :value="item.id" />
+            <el-select
+              v-if="['CANCEL_DELIVERABLE', 'CHANGE_ACCEPTANCE_CRITERIA'].includes(operationType)"
+              v-model="targetDeliverableId"
+              placeholder="选择交付物"
+              filterable
+              @change="
+                operationType === 'CHANGE_ACCEPTANCE_CRITERIA' && loadCriteria(String($event))
+              "
+            >
+              <el-option
+                v-for="item in deliverables"
+                :key="item.id"
+                :label="`${item.workItemName} / ${item.name}`"
+                :value="item.id"
+              />
             </el-select>
-            <el-input v-if="['ADD_STAGE', 'ADD_WORK_ITEM', 'ADD_CHECKLIST', 'ADD_DELIVERABLE'].includes(operationType)" v-model="operationName" placeholder="名称" />
-            <el-checkbox v-if="['ADD_WORK_ITEM', 'ADD_CHECKLIST', 'ADD_DELIVERABLE'].includes(operationType)" v-model="operationRequired">必需项</el-checkbox>
+            <el-input
+              v-if="
+                ['ADD_STAGE', 'ADD_WORK_ITEM', 'ADD_CHECKLIST', 'ADD_DELIVERABLE'].includes(
+                  operationType,
+                )
+              "
+              v-model="operationName"
+              placeholder="名称"
+            />
+            <el-checkbox
+              v-if="['ADD_WORK_ITEM', 'ADD_CHECKLIST', 'ADD_DELIVERABLE'].includes(operationType)"
+              v-model="operationRequired"
+              >必需项</el-checkbox
+            >
           </div>
 
           <div v-if="operationType === 'CHANGE_ACCEPTANCE_CRITERIA'" class="criteria-editor">
-            <div v-for="(criterion, index) in criteriaDraft" :key="criterion.id ?? index" class="criterion-row">
+            <div
+              v-for="(criterion, index) in criteriaDraft"
+              :key="criterion.id ?? index"
+              class="criterion-row"
+            >
               <el-input v-model="criterion.name" placeholder="验收标准" />
               <el-checkbox v-model="criterion.required">必需</el-checkbox>
-              <el-input-number v-model="criterion.weight" :min="0" :max="100" controls-position="right" />
-              <el-button link type="danger" @click="criteriaDraft.splice(index, 1)">删除</el-button>
+              <el-input-number
+                v-model="criterion.weight"
+                :min="0"
+                :max="100"
+                controls-position="right"
+              />
+              <el-button link type="danger" @click="criteriaDraft.splice(index, 1)"
+                >删除</el-button
+              >
             </div>
             <el-button link type="primary" @click="addCriterion">+ 新增标准</el-button>
           </div>
@@ -457,27 +694,88 @@ function describeOperation(operation: { operationType: string; entityId?: string
       </el-form>
       <template #footer>
         <el-button @click="changeDialog = false">取消</el-button>
-        <el-button type="primary" :disabled="!form.title || !form.description || !form.reason" @click="createChange">创建草稿</el-button>
+        <el-button
+          type="primary"
+          :disabled="!form.title || !form.description || !form.reason"
+          @click="createChange"
+          >创建草稿</el-button
+        >
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.changes-panel { padding-top: 8px; }
-.toolbar-actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
-.diff-card { margin-top: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); }
-.operation-builder { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); }
-.section-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.operation-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
-.criteria-editor { margin: 12px 0; }
-.criterion-row { display: grid; grid-template-columns: minmax(240px, 1fr) 80px 140px 60px; gap: 8px; align-items: center; margin-bottom: 8px; }
-.operation-list { margin-top: 14px; }
-.operation-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; }
-.muted { color: var(--text-muted); font-size: 12px; }
+.changes-panel {
+  padding-top: 8px;
+}
+.toolbar-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.diff-card {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+}
+.operation-builder {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.operation-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.criteria-editor {
+  margin: 12px 0;
+}
+.criterion-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 80px 140px 60px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.operation-list {
+  margin-top: 14px;
+}
+.operation-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.muted {
+  color: var(--text-muted);
+  font-size: 12px;
+}
 @media (max-width: 760px) {
-  .operation-fields { grid-template-columns: 1fr; }
-  .criterion-row { grid-template-columns: 1fr; }
-  .section-head { flex-direction: column; }
+  .operation-fields {
+    grid-template-columns: 1fr;
+  }
+  .criterion-row {
+    grid-template-columns: 1fr;
+  }
+  .section-head {
+    flex-direction: column;
+  }
 }
 </style>
