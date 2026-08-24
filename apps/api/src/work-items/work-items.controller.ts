@@ -8,6 +8,7 @@ import {
   RequireProjectAccess,
 } from '../common/decorators';
 import type { RequestUser } from '../common/types';
+import { ExecutionIntegrityService } from '../project-plans/execution-integrity.service';
 import {
   CancelWorkItemDto,
   CompleteWorkItemChecklistDto,
@@ -20,7 +21,10 @@ import { WorkItemsService } from './work-items.service';
 @ApiTags('Work Items')
 @Controller()
 export class WorkItemsController {
-  constructor(private readonly service: WorkItemsService) {}
+  constructor(
+    private readonly service: WorkItemsService,
+    private readonly integrity: ExecutionIntegrityService,
+  ) {}
 
   @Get('work-items')
   @RequirePermissions(PERMISSIONS.TASK_VIEW)
@@ -45,11 +49,15 @@ export class WorkItemsController {
   @RequirePermissions(PERMISSIONS.TASK_CREATE)
   @RequireProjectAccess()
   @AuditAction('work-item.create', 'ProjectWorkItem')
-  create(
+  async create(
     @CurrentUser() user: RequestUser,
     @Param('projectId') projectId: string,
     @Body() dto: CreateWorkItemDto,
   ) {
+    if (!dto.planStageId && !dto.parentWorkItemId) {
+      const planStageId = await this.integrity.ensureManualStage(projectId);
+      return this.service.create(user, projectId, { ...dto, planStageId });
+    }
     return this.service.create(user, projectId, dto);
   }
 
