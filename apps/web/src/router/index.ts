@@ -41,6 +41,10 @@ const router = createRouter({
           name: 'project-detail',
           component: () => import('../views/projects/ProjectDetailView.vue'),
           meta: { title: '项目详情', permission: PERMISSIONS.PROJECT_VIEW },
+          beforeEnter: (to) =>
+            typeof to.query.tab === 'string'
+              ? true
+              : { path: to.path, query: { ...to.query, tab: 'execution' }, replace: true },
         },
         {
           path: 'plans',
