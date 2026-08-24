@@ -85,7 +85,7 @@ async function upload(): Promise<void> {
 }
 async function submit(id: string): Promise<void> {
   await documentsApi.submit(id);
-  ElMessage.success('已提交审核');
+  ElMessage.success('已提交人工审核');
   await refresh();
 }
 async function review(id: string, status: 'APPROVED' | 'REJECTED'): Promise<void> {
@@ -98,11 +98,6 @@ async function review(id: string, status: 'APPROVED' | 'REJECTED'): Promise<void
   }
   await documentsApi.review(id, status, comment);
   ElMessage.success(status === 'APPROVED' ? '审核已通过' : '已驳回');
-  await refresh();
-}
-async function retryAiReview(versionId: string): Promise<void> {
-  await documentsApi.retryAiReview(versionId);
-  ElMessage.success('AI 审核已重新排队');
   await refresh();
 }
 async function completeTask(): Promise<void> {
@@ -223,7 +218,7 @@ async function completeTask(): Promise<void> {
                 class="review-card"
               >
                 <div class="section-title">
-                  <strong>{{ reviewItem.reviewType === 'AI' ? 'AI 审核' : '人工审核' }}</strong>
+                  <strong>{{ reviewItem.reviewType === 'AI' ? '历史 AI 审核' : '人工审核' }}</strong>
                   <StatusTag :value="reviewItem.status" />
                 </div>
                 <p v-if="reviewItem.score !== undefined" class="muted">
@@ -239,16 +234,6 @@ async function completeTask(): Promise<void> {
                     >
                   </li>
                 </ul>
-                <el-button
-                  v-if="
-                    reviewItem.reviewType === 'AI' &&
-                    reviewItem.status === 'FAILED' &&
-                    auth.has(PERMISSIONS.DOCUMENT_REVIEW)
-                  "
-                  size="small"
-                  @click="retryAiReview(deliverable.documents[0].versions[0].id)"
-                  >重新 AI 审核</el-button
-                >
               </div>
             </div>
             <div class="actions">
@@ -267,7 +252,7 @@ async function completeTask(): Promise<void> {
                 size="small"
                 type="primary"
                 @click="submit(deliverable.documents[0].id)"
-                >提交审核</el-button
+                >提交人工审核</el-button
               >
               <template
                 v-if="
