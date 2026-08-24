@@ -107,12 +107,36 @@ export class ProjectPlansService {
       const project = await tx.project.findFirst({ where: { id: projectId, deletedAt: null } });
       if (!project)
         throw new NotFoundException({ code: 'PROJECT_NOT_FOUND', message: '项目不存在' });
-      if (await tx.projectPlan.count({ where: { projectId } }))
+
+      const existingPlan = await tx.projectPlan.findUnique({
+        where: { projectId },
+        include: {
+          stages: {
+            orderBy: { sortOrder: 'asc' },
+            include: {
+              workItems: {
+                include: {
+                  checklistItems: { select: { completed: true } },
+                  documents: { where: { deletedAt: null }, select: { id: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!existingPlan) {
+        await this.createPlan(tx, project, version, user.id);
+        return;
+      }
+
+      if (!this.canAdoptTemporaryPlan(existingPlan))
         throw new ConflictException({
           code: 'PROJECT_PLAN_EXISTS',
-          message: '项目已有执行计划，请使用同步功能',
+          message: '项目已有正式执行计划或已有执行记录，请使用同步或项目变更功能',
         });
-      await this.createPlan(tx, project, version, user.id);
+
+      await this.adoptTemporaryPlan(tx, existingPlan, project, version, user.id);
     });
     return this.get(user, projectId);
   }
@@ -201,6 +225,86 @@ export class ProjectPlansService {
     return { ...(await this.get(user, projectId)), appliedDiff: preview.diff };
   }
 
+  private canAdoptTemporaryPlan(plan: {
+    sourceSopVersionId: string | null;
+    stages: Array<{
+      isCustom: boolean;
+      sourceStageId: string | null;
+      sourceStageKey: string | null;
+      workItems: Array<{
+        sourceType: string;
+        isCustom: boolean;
+        status: string;
+        progress: number;
+        checklistItems: Array<{ completed: boolean }>;
+        documents: Array<{ id: string }>;
+      }>;
+    }>;
+  }): boolean {
+    if (plan.sourceSopVersionId) return false;
+    return plan.stages.every(
+      (stage) =>
+        stage.isCustom &&
+        !stage.sourceStageId &&
+        !stage.sourceStageKey &&
+        stage.workItems.every(
+          (item) =>
+            item.sourceType === 'MANUAL' &&
+            item.isCustom &&
+            item.status === 'TODO' &&
+            item.progress === 0 &&
+            !item.checklistItems.some((check) => check.completed) &&
+            item.documents.length === 0,
+        ),
+    );
+  }
+
+  private async adoptTemporaryPlan(
+    tx: Prisma.TransactionClient,
+    plan: {
+      id: string;
+      stages: Array<{ id: string; sortOrder: number }>;
+    },
+    project: { id: string; managerUserId: string; plannedStartDate: Date | null },
+    version: VersionTree,
+    userId: string,
+  ) {
+    const maxSourceSortOrder = version.stages.reduce(
+      (max, stage) => Math.max(max, stage.sortOrder),
+      -1,
+    );
+    const maxExistingSortOrder = plan.stages.reduce(
+      (max, stage) => Math.max(max, stage.sortOrder),
+      -1,
+    );
+    const temporaryBase = Math.max(maxSourceSortOrder, maxExistingSortOrder) + plan.stages.length + 1000;
+
+    for (const [index, stage] of plan.stages.entries())
+      await tx.projectStage.update({
+        where: { id: stage.id },
+        data: { sortOrder: temporaryBase + index },
+      });
+
+    await tx.projectPlan.update({
+      where: { id: plan.id },
+      data: {
+        sourceSopVersionId: version.id,
+        name: `${version.template.name} ${version.version}`,
+        progress: 0,
+        generatedAt: new Date(),
+        syncedAt: null,
+      },
+    });
+
+    await this.createPlanStages(tx, plan.id, project, version, userId);
+
+    for (const [index, stage] of plan.stages.entries())
+      await tx.projectStage.update({
+        where: { id: stage.id },
+        data: { sortOrder: maxSourceSortOrder + 1 + index },
+      });
+  }
+
   private async createPlan(
     tx: Prisma.TransactionClient,
     project: { id: string; managerUserId: string; plannedStartDate: Date | null },
@@ -214,13 +318,24 @@ export class ProjectPlansService {
         name: `${version.template.name} ${version.version}`,
       },
     });
+    await this.createPlanStages(tx, plan.id, project, version, userId);
+    return plan;
+  }
+
+  private async createPlanStages(
+    tx: Prisma.TransactionClient,
+    planId: string,
+    project: { id: string; managerUserId: string; plannedStartDate: Date | null },
+    version: VersionTree,
+    userId: string,
+  ) {
     let cursor = project.plannedStartDate ?? new Date();
     for (const sourceStage of version.stages) {
       const stageStart = cursor;
       const stageEnd = this.addDays(stageStart, Math.max(1, sourceStage.defaultDurationDays) - 1);
       const stage = await tx.projectStage.create({
         data: {
-          planId: plan.id,
+          planId,
           sourceStageId: sourceStage.id,
           sourceStageKey: sourceStage.stableKey,
           name: sourceStage.name,
@@ -305,7 +420,6 @@ export class ProjectPlansService {
       }
       cursor = this.addDays(stageEnd, 1);
     }
-    return plan;
   }
 
   private async loadPlan(projectId: string) {
