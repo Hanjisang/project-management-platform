@@ -22,12 +22,12 @@ const ai = useQuery({ queryKey: ['integration', 'ai'], queryFn: messagesApi.aiSt
 <template>
   <div>
     <PageHeader
-      title="集成接口"
+      title="集成配置"
       description="当前版本仅保留外部系统适配接口，核心项目管理流程不依赖任何外部集成"
     />
     <el-alert
-      title="钉钉、禅道和 AI 当前均未启用真实连接"
-      description="相关 Provider、数据字段和扩展点继续保留；后续启用时再配置实现与凭证。当前不会发送外部请求，也不会伪造成功结果。"
+      title="当前未配置"
+      description="钉钉、禅道和 AI 当前均未启用真实连接。相关 Provider、数据字段和扩展点继续保留；后续启用时再配置实现与凭证。当前不会发送外部请求，也不会伪造成功结果。"
       type="info"
       :closable="false"
       show-icon
