@@ -80,6 +80,21 @@ async function applySync(): Promise<void> {
     ElMessage.error((error as Error).message);
   }
 }
+async function toggleChecklist(id: string, completed: unknown): Promise<void> {
+  try {
+    await projectsApi.completeChecklist(id, Boolean(completed));
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ['project-plan', projectId.value] }),
+      client.invalidateQueries({ queryKey: ['project-execution', projectId.value] }),
+      client.invalidateQueries({ queryKey: ['project', projectId.value] }),
+      client.invalidateQueries({ queryKey: ['tasks'] }),
+      client.invalidateQueries({ queryKey: ['task-detail'] }),
+      client.invalidateQueries({ queryKey: ['dashboard'] }),
+    ]);
+  } catch (error) {
+    ElMessage.error((error as Error).message);
+  }
+}
 function openTask(task: ProjectWorkItem): void {
   selectedTaskId.value = task.id;
   drawer.value = true;
@@ -91,7 +106,7 @@ function openTask(task: ProjectWorkItem): void {
     <div class="filters plan-toolbar">
       <div>
         <strong>计划结构</strong>
-        <p class="muted">SOP 负责生成计划结构；任务执行、检查项和交付物统一在任务抽屉处理。</p>
+        <p class="muted">SOP 负责生成计划结构；检查项可在计划中直接执行，完整任务与交付物在任务抽屉处理。</p>
       </div>
       <div class="filter-row">
         <el-select
@@ -169,6 +184,17 @@ function openTask(task: ProjectWorkItem): void {
           <el-progress :percentage="task.progress" :stroke-width="7" />
           <StatusTag :value="task.status" />
           <el-button link type="primary" @click="openTask(task)">打开任务</el-button>
+          <div v-if="task.checklistItems.length" class="checklist-inline">
+            <el-checkbox
+              v-for="item in task.checklistItems"
+              :key="item.id"
+              :model-value="item.completed"
+              :disabled="!auth.has(PERMISSIONS.TASK_EDIT)"
+              @change="toggleChecklist(item.id, $event)"
+            >
+              {{ item.name }}<span v-if="item.required" class="required-mark"> *</span>
+            </el-checkbox>
+          </div>
         </div>
       </article>
     </div>
@@ -218,6 +244,17 @@ function openTask(task: ProjectWorkItem): void {
   padding: 10px 0;
   border-top: 1px solid var(--border);
 }
+.checklist-inline {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter);
+}
+.checklist-inline .el-checkbox { margin-right: 0; }
+.required-mark { color: var(--el-color-danger); }
 .task-meta { margin-top: 4px; font-size: 12px; }
 .muted { color: var(--el-text-color-secondary); }
 @media (max-width: 900px) {
@@ -225,5 +262,6 @@ function openTask(task: ProjectWorkItem): void {
   .compact-task { grid-template-columns: 1fr 100px; }
   .compact-task > span,
   .compact-task > .el-progress { display: none; }
+  .checklist-inline { grid-column: 1 / -1; }
 }
 </style>
