@@ -27,9 +27,11 @@ const myProjects = computed(() =>
 );
 const metrics = [
   ['projectCount', '项目总数', '可访问项目'],
+  ['NORMAL', '正常项目', '当前状态正常'],
   ['WARNING', '预警项目', '需要关注'],
   ['HIGH_RISK', '高风险项目', '需要立即介入'],
   ['overdueTaskCount', '逾期任务', '尚未完成'],
+  ['pendingMessageCount', '待确认消息', '等待人工确认'],
   ['requiredDeliverableNotSubmittedCount', '待提交必交资料', '尚未上传文档'],
   ['pendingDeliverableReviewCount', '待人工审核', '已上传等待审核'],
 ] as const;
@@ -119,6 +121,20 @@ const metrics = [
       </section>
 
       <section class="content-grid">
+        <article class="panel">
+          <div class="panel-header"><h3>项目进度排行</h3></div>
+          <div class="table-wrap">
+            <el-table :data="query.data.value.progressRanking" empty-text="暂无项目">
+              <el-table-column prop="name" label="项目" min-width="170" />
+              <el-table-column label="健康度" width="100">
+                <template #default="scope"><StatusTag :value="scope.row.health" /></template>
+              </el-table-column>
+              <el-table-column label="进度" min-width="160">
+                <template #default="scope"><el-progress :percentage="scope.row.progress" /></template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </article>
         <article class="panel">
           <div class="panel-header"><h3>人员任务负荷</h3></div>
           <div class="table-wrap">
