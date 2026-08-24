@@ -21,6 +21,7 @@ describe('DashboardService parity', () => {
       status: 'OPEN',
       project: { id: 'project-1', name: 'Project' },
     }));
+    const issueCount = vi.fn().mockResolvedValue(21);
     const prisma = {
       project: { findMany: vi.fn().mockResolvedValue([]) },
       projectWorkItem: {
@@ -32,7 +33,7 @@ describe('DashboardService parity', () => {
       projectChangeRequest: { findMany: vi.fn().mockResolvedValue([]) },
       issue: {
         findMany: vi.fn().mockResolvedValue(highRiskIssues),
-        count: vi.fn().mockResolvedValue(21),
+        count: issueCount,
       },
       message: { count: vi.fn().mockResolvedValue(0) },
       user: { findMany: vi.fn().mockResolvedValue([]) },
@@ -43,6 +44,6 @@ describe('DashboardService parity', () => {
 
     expect(result.highRiskIssues).toHaveLength(20);
     expect(result.summary.highRiskIssueCount).toBe(21);
-    expect(prisma.issue.count).toHaveBeenCalledTimes(1);
+    expect(issueCount).toHaveBeenCalledTimes(1);
   });
 });
