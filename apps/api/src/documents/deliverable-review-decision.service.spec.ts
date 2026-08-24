@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { DeliverableReviewDecisionService } from './deliverable-review-decision.service';
 
 const now = new Date('2026-08-24T00:00:00Z');
@@ -16,13 +16,18 @@ const input = (
 describe('effective deliverable review decision', () => {
   const service = new DeliverableReviewDecisionService();
 
-  it('lets AI approve in AI_WITH_HUMAN_OVERRIDE', () => {
+  beforeAll(() => {
+    process.env.NODE_ENV = 'test';
+    process.env.AI_FAKE_ENABLED = 'true';
+  });
+
+  it('lets fake AI approve in AI_WITH_HUMAN_OVERRIDE contract tests', () => {
     expect(
       service.decide(input('AI_WITH_HUMAN_OVERRIDE', [review('AI', 'APPROVED')])).effectiveStatus,
     ).toBe('APPROVED');
   });
 
-  it('lets a newer human decision override AI', () => {
+  it('lets a newer human decision override fake AI', () => {
     expect(
       service.decide(
         input('AI_WITH_HUMAN_OVERRIDE', [
