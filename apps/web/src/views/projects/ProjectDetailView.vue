@@ -78,22 +78,28 @@ const lifecycle = useMutation({
   onError: (error: Error) => showLifecycleError(error),
 });
 function showLifecycleError(error: Error): void {
-  const details =
-    error instanceof ApiError ? (error.details as Record<string, unknown>) : undefined;
-  const blockers = details?.missingRequiredDeliverables;
-  if (Array.isArray(blockers) && blockers.length) {
+  const details = error instanceof ApiError ? (error.details as Record<string, unknown>) : undefined;
+  const deliverableBlockers = Array.isArray(details?.missingRequiredDeliverables)
+    ? details.missingRequiredDeliverables
+    : [];
+  const documentBlockers = Array.isArray(details?.missingRequiredDocuments)
+    ? details.missingRequiredDocuments
+    : [];
+  if (deliverableBlockers.length || documentBlockers.length) {
     const statusLabels: Record<string, string> = {
       NOT_SUBMITTED: '未上传',
       DRAFT: '草稿',
       PENDING_REVIEW: '待审核',
       REJECTED: '已驳回',
+      NEEDS_REVISION: '需修订',
     };
-    void ElMessageBox.alert(
-      h('div', [
-        h('p', error.message),
+    const children = [h('p', error.message)];
+    if (deliverableBlockers.length) {
+      children.push(h('strong', '计划必交资料'));
+      children.push(
         h(
           'ul',
-          blockers.map((item) => {
+          deliverableBlockers.map((item) => {
             const blocker = item as {
               planTaskName: string;
               deliverableName: string;
@@ -105,19 +111,32 @@ function showLifecycleError(error: Error): void {
             );
           }),
         ),
-      ]),
-      '项目暂不可结项',
-      { type: 'warning' },
-    );
+      );
+    }
+    if (documentBlockers.length) {
+      children.push(h('strong', '普通必需文档'));
+      children.push(
+        h(
+          'ul',
+          documentBlockers.map((item) => {
+            const blocker = item as { name: string; status: string };
+            return h('li', `${blocker.name}：${statusLabels[blocker.status] ?? blocker.status}`);
+          }),
+        ),
+      );
+    }
+    void ElMessageBox.alert(h('div', children), '项目暂不可结项', { type: 'warning' });
     return;
   }
   ElMessage.error(error.message);
 }
 async function action(value: 'start' | 'pause' | 'resume' | 'close'): Promise<void> {
   if (value === 'close')
-    await ElMessageBox.confirm('后端将校验计划、任务、高优问题与必需交付物。', '确认项目结项', {
-      type: 'warning',
-    });
+    await ElMessageBox.confirm(
+      '后端将校验计划任务、高优问题、必需普通文档、必交资料与待处理变更。',
+      '确认项目结项',
+      { type: 'warning' },
+    );
   lifecycle.mutate(value);
 }
 function openEdit(): void {
