@@ -37,7 +37,7 @@ const issuePayload = z.object({
   impact: z.number().int().min(1).max(5).optional(),
 });
 const progressPayload = z.object({
-  planTaskId: z.string(),
+  workItemId: z.string(),
   progress: z.number().int().min(0).max(100),
   evidence: z.string().max(2000),
 });
@@ -179,9 +179,7 @@ export class MessagesService {
       });
     const projectIds = new Set<string>();
     for (const decision of dto.decisions) {
-      const action = await this.prisma.pendingAction.findUnique({
-        where: { id: decision.actionId },
-      });
+      const action = await this.prisma.pendingAction.findUnique({ where: { id: decision.actionId } });
       if (!action || action.messageId !== messageId)
         throw new BadRequestException({
           code: 'PENDING_ACTION_INVALID',
@@ -263,19 +261,27 @@ export class MessagesService {
   ): Promise<{ type: string; id: string }> {
     if (type === 'CREATE_TASK') {
       const payload = taskPayload.parse(raw);
-      const item = await tx.task.create({
+      const stageId = await this.ensureManualStage(tx, projectId);
+      const aggregate = await tx.projectWorkItem.aggregate({
+        where: { planStageId: stageId },
+        _max: { sortOrder: true },
+      });
+      const item = await tx.projectWorkItem.create({
         data: {
           projectId,
-          title: payload.title,
+          planStageId: stageId,
+          name: payload.title,
           description: payload.description,
           priority: payload.priority,
-          dueDate: payload.dueDate ? new Date(payload.dueDate) : null,
-          sourceType: 'MESSAGE',
-          sourceId: messageId,
+          plannedEndDate: payload.dueDate ? new Date(payload.dueDate) : null,
+          sourceType: 'MANUAL',
+          sortOrder: (aggregate._max.sortOrder ?? -1) + 1,
+          isCustom: true,
+          required: false,
           createdById: userId,
         },
       });
-      return { type: 'Task', id: item.id };
+      return { type: 'ProjectWorkItem', id: item.id };
     }
     if (type === 'CREATE_ISSUE' || type === 'CREATE_RISK') {
       const payload = issuePayload.parse(raw);
@@ -302,15 +308,15 @@ export class MessagesService {
     }
     if (type === 'UPDATE_PROGRESS') {
       const payload = progressPayload.parse(raw);
-      const task = await tx.projectPlanTask.findFirst({
-        where: { id: payload.planTaskId, stage: { plan: { projectId } } },
+      const task = await tx.projectWorkItem.findFirst({
+        where: { id: payload.workItemId, projectId },
       });
       if (!task)
         throw new BadRequestException({
           code: 'PLAN_TASK_INVALID',
           message: '进度目标节点不属于该项目',
         });
-      await tx.projectPlanTask.update({
+      await tx.projectWorkItem.update({
         where: { id: task.id },
         data: {
           progress: payload.progress,
@@ -320,7 +326,7 @@ export class MessagesService {
         },
       });
       await this.progress.recomputeStage(task.planStageId, tx);
-      return { type: 'ProjectPlanTask', id: task.id };
+      return { type: 'ProjectWorkItem', id: task.id };
     }
     const payload = notePayload.parse(raw);
     const item = await tx.projectNote.create({
@@ -332,6 +338,33 @@ export class MessagesService {
       },
     });
     return { type: 'ProjectNote', id: item.id };
+  }
+  private async ensureManualStage(tx: Prisma.TransactionClient, projectId: string): Promise<string> {
+    let plan = await tx.projectPlan.findUnique({ where: { projectId } });
+    if (!plan) {
+      plan = await tx.projectPlan.create({
+        data: { projectId, name: '项目自定义执行计划' },
+      });
+    }
+    const existing = await tx.projectStage.findFirst({
+      where: { planId: plan.id, isCustom: true, name: '临时任务' },
+      select: { id: true },
+    });
+    if (existing) return existing.id;
+    const aggregate = await tx.projectStage.aggregate({
+      where: { planId: plan.id },
+      _max: { sortOrder: true },
+    });
+    const stage = await tx.projectStage.create({
+      data: {
+        planId: plan.id,
+        name: '临时任务',
+        description: '项目执行过程中产生的人工或消息任务',
+        sortOrder: (aggregate._max.sortOrder ?? -1) + 1,
+        isCustom: true,
+      },
+    });
+    return stage.id;
   }
   private toActions(
     projectId: string,
@@ -381,9 +414,7 @@ export class MessagesService {
         analysisId,
         type: 'CREATE_NOTE' as const,
         payload: {
-          content: payload.dueDate
-            ? `${payload.content}\n截止日期：${payload.dueDate}`
-            : payload.content,
+          content: payload.dueDate ? `${payload.content}\n截止日期：${payload.dueDate}` : payload.content,
         },
       })),
     ];
@@ -409,7 +440,6 @@ export class MessagesService {
     }
     return 'AI_ANALYSIS_FAILED';
   }
-
   private async claimAnalysis(messageId: string): Promise<{
     analysis: MessageAnalysis & { actions?: PendingAction[] };
     execute: boolean;
@@ -459,7 +489,6 @@ export class MessagesService {
       execute: true,
     };
   }
-
   private isTransactionConflict(error: unknown): boolean {
     return error instanceof Prisma.PrismaClientKnownRequestError && ['P2034'].includes(error.code);
   }

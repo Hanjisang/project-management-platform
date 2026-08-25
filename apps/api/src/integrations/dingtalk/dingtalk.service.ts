@@ -1,45 +1,24 @@
-import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
-import { MessagesService } from '../../messages/messages.service';
-import { PrismaService } from '../../prisma/prisma.service';
-import { DingtalkMessageMapper } from './dingtalk-message.mapper';
-import { DingtalkClient } from './dingtalk.client';
+import { ConflictException, Injectable } from '@nestjs/common';
 
 @Injectable()
 export class DingtalkService {
-  constructor(
-    private readonly client: DingtalkClient,
-    private readonly prisma: PrismaService,
-    private readonly messages: MessagesService,
-    private readonly mapper: DingtalkMessageMapper,
-  ) {}
   status() {
-    const configured = this.client.configured();
     return {
-      status: configured ? 'CONFIGURED' : 'NOT_CONFIGURED',
-      configured,
-      capabilities: ['BOT_MENTION_CALLBACK', 'MANUAL_IMPORT'],
-      streamConfigured: this.client.streamConfigured(),
+      status: 'NOT_CONFIGURED',
+      configured: false,
+      capabilities: ['RESERVED_ADAPTER'],
+      streamConfigured: false,
       fullChatMonitoring: false,
     };
   }
-  async receive(payload: unknown) {
-    const mapped = this.mapper.map(payload as Parameters<DingtalkMessageMapper['map']>[0]);
-    const project = mapped.projectCode
-      ? await this.prisma.project.findFirst({
-          where: { code: mapped.projectCode, deletedAt: null },
-          select: { id: true },
-        })
-      : null;
-    return this.messages.ingestExternal({
-      source: 'DINGTALK_BOT',
-      externalMessageId: mapped.externalMessageId,
-      projectId: project?.id,
-      senderName: mapped.senderName,
-      senderExternalId: mapped.senderExternalId,
-      content: mapped.content,
-      receivedAt: mapped.receivedAt,
-      rawPayload: mapped.rawPayload as Prisma.InputJsonValue,
-    });
+
+  receive(payload: unknown): Promise<{ id: string }> {
+    void payload;
+    return Promise.reject(
+      new ConflictException({
+        code: 'DINGTALK_NOT_ENABLED',
+        message: '钉钉集成当前仅预留接口，尚未启用消息接收实现',
+      }),
+    );
   }
 }

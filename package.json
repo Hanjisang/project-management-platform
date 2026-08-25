@@ -12,6 +12,11 @@
     "apps/*",
     "packages/*"
   ],
+  "overrides": {
+    "officeparser": {
+      "pdfjs-dist": "5.5.207"
+    }
+  },
   "scripts": {
     "dev": "concurrently -k -n api,web -c blue,green \"npm run dev -w @pmp/api\" \"npm run dev -w @pmp/web\"",
     "build": "npm run build -w @pmp/shared-types && npm run build -w @pmp/shared-constants && npm run build -w @pmp/shared-utils && npm run build -w @pmp/api && npm run build -w @pmp/web",
@@ -43,5 +48,8 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.2",
     "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "pdfjs-dist": "5.5.207"
   }
 }

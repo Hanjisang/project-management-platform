@@ -20,8 +20,7 @@ describe('SOP plan diff', () => {
             sortOrder: 0,
             weight: 100,
             required: true,
-            deliverableRequired: false,
-            deliverableName: null,
+            deliverables: [],
             checklistItems: [
               {
                 id: 'pc1',
@@ -61,8 +60,7 @@ describe('SOP plan diff', () => {
             sortOrder: 0,
             weight: 50,
             required: true,
-            deliverableRequired: false,
-            deliverableName: null,
+            deliverables: [],
             checklistItems: [
               {
                 id: 'c-modified',
@@ -82,8 +80,7 @@ describe('SOP plan diff', () => {
             sortOrder: 1,
             weight: 50,
             required: true,
-            deliverableRequired: false,
-            deliverableName: null,
+            deliverables: [],
             checklistItems: [],
           },
         ],
@@ -130,8 +127,7 @@ describe('SOP plan diff', () => {
             sortOrder: 0,
             weight: 100,
             required: true,
-            deliverableRequired: false,
-            deliverableName: null,
+            deliverables: [],
             checklistItems: [
               {
                 id: 'check-plan',
@@ -150,8 +146,7 @@ describe('SOP plan diff', () => {
             sortOrder: 1,
             weight: 0,
             required: true,
-            deliverableRequired: false,
-            deliverableName: null,
+            deliverables: [],
             checklistItems: [],
           },
         ],
@@ -174,8 +169,7 @@ describe('SOP plan diff', () => {
             sortOrder: 0,
             weight: 100,
             required: true,
-            deliverableRequired: false,
-            deliverableName: null,
+            deliverables: [],
             checklistItems: [],
           },
         ],
@@ -185,6 +179,114 @@ describe('SOP plan diff', () => {
     const diff = buildPlanDiff(current, target);
     expect(diff.map((item) => `${item.operation}:${item.entity}`)).toEqual(
       expect.arrayContaining(['REMOVE:TASK', 'REMOVE:CHECKLIST']),
+    );
+  });
+
+  it('detects deliverable and template additions, modifications and removals', () => {
+    const task = {
+      id: 'task',
+      name: '接口对接',
+      description: null,
+      sortOrder: 0,
+      weight: 100,
+      required: true,
+      checklistItems: [],
+    };
+    const current = [
+      {
+        id: 'stage-plan',
+        sourceStageKey: 'stage',
+        name: '实施',
+        description: null,
+        sortOrder: 0,
+        weight: 100,
+        tasks: [
+          {
+            ...task,
+            sourceTaskKey: 'task',
+            deliverables: [
+              {
+                id: 'deliverable-plan',
+                sourceDeliverableKey: 'deliverable',
+                name: '接口文档',
+                description: null,
+                required: true,
+                sortOrder: 0,
+                templates: [
+                  {
+                    id: 'template-modified-plan',
+                    fileName: '接口模板.docx',
+                    mimeType:
+                      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    size: 10n,
+                    checksum: 'old',
+                  },
+                  {
+                    id: 'template-removed-plan',
+                    fileName: '旧表格.xlsx',
+                    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    size: 20n,
+                    checksum: 'removed',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const target = [
+      {
+        id: 'stage-source',
+        stableKey: 'stage',
+        name: '实施',
+        description: null,
+        sortOrder: 0,
+        weight: 100,
+        tasks: [
+          {
+            ...task,
+            stableKey: 'task',
+            deliverables: [
+              {
+                id: 'deliverable-source',
+                stableKey: 'deliverable',
+                name: '接口交付文档',
+                description: null,
+                required: true,
+                sortOrder: 0,
+                templates: [
+                  {
+                    id: 'template-modified-source',
+                    fileName: '接口模板.docx',
+                    mimeType:
+                      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    size: 11n,
+                    checksum: 'new',
+                  },
+                  {
+                    id: 'template-added-source',
+                    fileName: '接口说明.pdf',
+                    mimeType: 'application/pdf',
+                    size: 30n,
+                    checksum: 'added',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const diff = buildPlanDiff(current, target);
+    expect(diff.map((item) => `${item.operation}:${item.entity}`)).toEqual(
+      expect.arrayContaining([
+        'MODIFY:DELIVERABLE',
+        'MODIFY:TEMPLATE',
+        'ADD:TEMPLATE',
+        'REMOVE:TEMPLATE',
+      ]),
     );
   });
 });

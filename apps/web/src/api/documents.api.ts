@@ -9,6 +9,12 @@ export const documentsApi = {
         headers: { 'content-type': 'multipart/form-data' },
       })
     ).data,
+  uploadForDeliverable: async (projectDeliverableId: string, form: FormData) =>
+    (
+      await api.post(`/project-deliverables/${projectDeliverableId}/documents`, form, {
+        headers: { 'content-type': 'multipart/form-data' },
+      })
+    ).data,
   review: async (id: string, status: 'APPROVED' | 'REJECTED', comment?: string) =>
     (await api.post(`/documents/${id}/reviews`, { status, comment })).data,
   submit: async (id: string) => (await api.post(`/documents/${id}/submit`)).data,
@@ -18,6 +24,8 @@ export const documentsApi = {
         headers: { 'content-type': 'multipart/form-data' },
       })
     ).data,
+  retryAiReview: async (versionId: string) =>
+    (await api.post(`/document-versions/${versionId}/ai-review/retry`)).data,
   remove: async (id: string) => api.delete(`/documents/${id}`),
   downloadUrl: (versionId: string) => `/api/v2/document-versions/${versionId}/download`,
 };

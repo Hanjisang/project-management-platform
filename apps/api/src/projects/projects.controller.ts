@@ -20,6 +20,7 @@ import {
   RequireProjectAccess,
 } from '../common/decorators';
 import type { RequestUser } from '../common/types';
+import { ExecutionIntegrityService } from '../project-plans/execution-integrity.service';
 import {
   CreateProjectDto,
   ProjectListQueryDto,
@@ -32,7 +33,10 @@ import { ProjectsService } from './projects.service';
 @ApiTags('Projects')
 @Controller('projects')
 export class ProjectsController {
-  constructor(private readonly service: ProjectsService) {}
+  constructor(
+    private readonly service: ProjectsService,
+    private readonly integrity: ExecutionIntegrityService,
+  ) {}
   @Get() @RequirePermissions(PERMISSIONS.PROJECT_VIEW) list(
     @CurrentUser() user: RequestUser,
     @Query() query: ProjectListQueryDto,
@@ -55,11 +59,12 @@ export class ProjectsController {
   @RequirePermissions(PERMISSIONS.PROJECT_EDIT)
   @RequireProjectAccess()
   @AuditAction('project.update', 'Project')
-  update(
+  async update(
     @CurrentUser() user: RequestUser,
     @Param('projectId') id: string,
     @Body() dto: UpdateProjectDto,
   ) {
+    await this.integrity.assertProjectDateUpdateAllowed(id, dto);
     return this.service.update(user, id, dto);
   }
   @Delete(':projectId')

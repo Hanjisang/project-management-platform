@@ -31,11 +31,14 @@ export const projectsApi = {
   generatePlan: async (id: string, sopVersionId: string) =>
     (await api.post<ProjectPlan>(`/projects/${id}/plan`, { sopVersionId })).data,
   completeChecklist: async (id: string, completed: boolean) =>
-    (await api.patch(`/checklist-items/${id}`, { completed })).data,
+    (await api.patch(`/work-item-checklist/${id}`, { completed })).data,
   updatePlanTask: async (id: string, input: UpdatePlanTaskInput) =>
-    (await api.patch(`/plan-tasks/${id}`, input)).data,
+    (await api.patch(`/work-items/${id}`, input)).data,
+  execution: async (id: string) => (await api.get(`/projects/${id}/execution`)).data,
   syncPreview: async (id: string, sopVersionId: string) =>
     (await api.get(`/projects/${id}/plan/sync-preview`, { params: { sopVersionId } })).data,
   syncPlan: async (id: string, sopVersionId: string, acceptedDiffHash: string) =>
     (await api.post(`/projects/${id}/plan/sync`, { sopVersionId, acceptedDiffHash })).data,
+  deliverableTemplateDownloadUrl: (id: string) =>
+    `/api/v2/project-deliverable-templates/${id}/download`,
 };

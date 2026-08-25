@@ -30,7 +30,7 @@ export interface AuthUser {
 export interface AiAnalysisResult {
   project: { id: string | null; name: string; confidence: number };
   summary: string;
-  progressUpdates: Array<{ planTaskId: string; progress: number; evidence: string }>;
+  progressUpdates: Array<{ workItemId: string; progress: number; evidence: string }>;
   issues: Array<{ title: string; description: string; severity: string }>;
   risks: Array<{
     title: string;
@@ -46,7 +46,7 @@ export interface AiAnalysisResult {
 
 export interface SopDiffItem {
   operation: 'ADD' | 'REMOVE' | 'MODIFY';
-  entity: 'STAGE' | 'TASK' | 'CHECKLIST';
+  entity: 'STAGE' | 'TASK' | 'CHECKLIST' | 'DELIVERABLE' | 'TEMPLATE';
   sourceId: string | null;
   planId: string | null;
   path: string;
@@ -58,7 +58,12 @@ export interface ProjectClosureBlockers {
   incompletePlanTasks: Array<{ id: string; name: string }>;
   incompleteTasks: Array<{ id: string; title: string }>;
   openHighPriorityIssues: Array<{ id: string; title: string }>;
-  missingRequiredDeliverables: Array<{ id: string; name: string }>;
+  missingRequiredDeliverables: Array<{
+    id: string;
+    planTaskName: string;
+    deliverableName: string;
+    reason: 'NOT_SUBMITTED' | 'DRAFT' | 'PENDING_REVIEW' | 'REJECTED';
+  }>;
 }
 
 export type ProjectStatus =
@@ -96,6 +101,7 @@ export interface CreateProjectInput {
   name: string;
   customerName: string;
   managerUserId: string;
+  approverUserId?: string;
   plannedStartDate?: string;
   plannedGoLiveDate?: string;
   description?: string;
@@ -104,6 +110,7 @@ export interface UpdateProjectInput {
   name?: string;
   customerName?: string;
   managerUserId?: string;
+  approverUserId?: string;
   plannedStartDate?: string;
   plannedGoLiveDate?: string;
   description?: string;
@@ -120,26 +127,30 @@ export interface IssueListQuery extends PageQuery {
   severity?: IssueSeverity | '';
   status?: IssueStatus | '';
 }
-export interface CreateTaskInput {
+export interface CreateWorkItemInput {
   projectId: string;
-  title: string;
+  name: string;
   description?: string;
   ownerUserId?: string;
-  planTaskId?: string;
+  planStageId?: string;
+  parentWorkItemId?: string;
   priority?: TaskPriority;
   plannedStartDate?: string;
-  dueDate?: string;
+  plannedEndDate?: string;
+  required?: boolean;
 }
-export interface UpdateTaskInput {
-  title?: string;
+export interface UpdateWorkItemInput {
+  name?: string;
   description?: string;
   ownerUserId?: string;
   priority?: TaskPriority;
   status?: Exclude<TaskStatus, 'DONE'>;
   progress?: number;
   plannedStartDate?: string;
-  dueDate?: string;
+  plannedEndDate?: string;
 }
+export type CreateTaskInput = CreateWorkItemInput;
+export type UpdateTaskInput = UpdateWorkItemInput;
 export interface UpdatePlanTaskInput {
   ownerUserId?: string;
   plannedStartDate?: string;
@@ -194,9 +205,6 @@ export interface CreateSopStageInput {
 export type UpdateSopStageInput = Partial<CreateSopStageInput>;
 export interface CreateSopTaskInput extends CreateSopStageInput {
   required?: boolean;
-  deliverableRequired?: boolean;
-  deliverableName?: string;
-  deliverableTemplate?: string;
 }
 export type UpdateSopTaskInput = Partial<CreateSopTaskInput>;
 export interface CreateSopChecklistInput {
@@ -204,6 +212,16 @@ export interface CreateSopChecklistInput {
   sortOrder?: number;
   required?: boolean;
 }
+export interface CreateSopDeliverableInput {
+  name: string;
+  description?: string;
+  required?: boolean;
+  sortOrder?: number;
+  reviewMode?: 'AI_WITH_HUMAN_OVERRIDE' | 'AI_THEN_HUMAN_REQUIRED' | 'HUMAN_ONLY';
+  aiAutoApproveThreshold?: number;
+  aiReviewInstruction?: string;
+}
+export type UpdateSopDeliverableInput = Partial<CreateSopDeliverableInput>;
 
 export interface DailyReportListQuery extends PageQuery {
   projectId?: string;

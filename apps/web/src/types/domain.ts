@@ -25,6 +25,8 @@ export interface Project {
   customerName: string;
   managerUserId: string;
   manager: UserRef;
+  approverUserId?: string;
+  approver?: UserRef;
   status: ProjectStatus;
   health: ProjectHealth;
   derivedHealth?: ProjectHealth;
@@ -36,13 +38,13 @@ export interface Project {
   description?: string;
   _count?: {
     members: number;
-    tasks: number;
+    workItems: number;
     issues: number;
     documents?: number;
     messages?: number;
   };
   members?: ProjectMember[];
-  plans?: Array<{ id: string; sourceVersion: { version: string; template: { name: string } } }>;
+  plans?: Array<{ id: string; sourceVersion?: { version: string; template: { name: string } } }>;
 }
 export interface ProjectMember {
   projectId: string;
@@ -56,19 +58,70 @@ export interface ChecklistItem {
   completed: boolean;
   required: boolean;
 }
-export interface PlanTask {
+export interface ProjectWorkItem {
   id: string;
+  projectId: string;
+  planStageId: string;
+  parentWorkItemId?: string;
   name: string;
   description?: string;
+  status: TaskStatus;
+  priority: TaskPriority;
   progress: number;
   weight: number;
   required: boolean;
-  deliverableRequired: boolean;
-  deliverableName?: string;
+  sourceType: 'SOP' | 'MANUAL' | 'CHANGE';
+  isCustom: boolean;
   plannedStartDate?: string;
   plannedEndDate?: string;
+  actualStartDate?: string;
+  actualEndDate?: string;
+  project: Pick<Project, 'id' | 'code' | 'name'>;
+  stage: { id: string; name: string; planId: string };
   owner?: UserRef;
   checklistItems: ChecklistItem[];
+  deliverables: ProjectDeliverable[];
+  children?: ProjectWorkItem[];
+  checklistSummary?: { completed: number; total: number };
+  deliverableSummary?: { approved: number; total: number };
+  zentaoSync?: { syncStatus: string; externalTaskId?: string };
+}
+export interface DeliverableTemplateFile {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  size: string;
+  checksum: string;
+  createdAt: string;
+}
+export interface ProjectDeliverable {
+  id: string;
+  name: string;
+  description?: string;
+  required: boolean;
+  sortOrder: number;
+  isCustom: boolean;
+  reviewMode: 'AI_WITH_HUMAN_OVERRIDE' | 'AI_THEN_HUMAN_REQUIRED' | 'HUMAN_ONLY';
+  needsRevision: boolean;
+  effectiveStatus:
+    | 'NOT_SUBMITTED'
+    | 'AI_PENDING'
+    | 'AI_REJECTED'
+    | 'HUMAN_REVIEW_REQUIRED'
+    | 'REJECTED'
+    | 'APPROVED'
+    | 'NEEDS_REVISION'
+    | 'AI_FAILED';
+  progressContribution?: 0 | 0.5 | 1;
+  templates: DeliverableTemplateFile[];
+  reviewCriteria: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    required: boolean;
+    weight: number;
+  }>;
+  documents: DocumentRecord[];
 }
 export interface PlanStage {
   id: string;
@@ -77,31 +130,18 @@ export interface PlanStage {
   weight: number;
   plannedStartDate?: string;
   plannedEndDate?: string;
-  tasks: PlanTask[];
+  workItems: ProjectWorkItem[];
 }
 export interface ProjectPlan {
   id: string;
   name: string;
   progress: number;
-  sourceSopVersionId: string;
+  sourceSopVersionId?: string;
   stages: PlanStage[];
   sourceVersion?: { version: string; template: { name: string } };
 }
-export interface Task {
-  id: string;
-  projectId: string;
-  title: string;
-  description?: string;
-  status: TaskStatus;
-  priority: TaskPriority;
-  progress: number;
-  plannedStartDate?: string;
-  dueDate?: string;
-  project: Pick<Project, 'id' | 'code' | 'name'>;
-  owner?: UserRef;
-  planTask?: { id: string; name: string };
-  zentaoSync?: { syncStatus: string; externalTaskId?: string };
-}
+export type Task = ProjectWorkItem;
+export type PlanTask = ProjectWorkItem;
 export interface Issue {
   id: string;
   projectId: string;
@@ -124,7 +164,12 @@ export interface DocumentRecord {
   description?: string;
   required: boolean;
   status: DocumentStatus;
-  planTask?: { id: string; name: string };
+  workItem?: { id: string; name: string; stage?: { id: string; name: string } };
+  projectDeliverable?: {
+    id: string;
+    name: string;
+    workItem: { id: string; name: string; stage: { id: string; name: string } };
+  };
   versions: Array<{
     id: string;
     version: string;
@@ -132,8 +177,30 @@ export interface DocumentRecord {
     mimeType: string;
     size: string;
     createdAt: string;
+    reviews: Array<{
+      id: string;
+      reviewType: 'AI' | 'HUMAN';
+      status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'FAILED';
+      score?: number;
+      summary?: string;
+      decisionReason?: string;
+      reviewer?: UserRef;
+      findings: Array<{
+        id: string;
+        severity: string;
+        title: string;
+        description: string;
+        suggestion?: string;
+      }>;
+      criterionResults: Array<{
+        id: string;
+        criterionId: string;
+        passed: boolean;
+        score?: number;
+        explanation?: string;
+      }>;
+    }>;
   }>;
-  reviews: Array<{ id: string; status: string; comment?: string; reviewer: UserRef }>;
 }
 export interface PendingAction {
   id: string;
@@ -169,7 +236,7 @@ export interface SopTemplate {
 export interface SopVersion {
   id: string;
   version: string;
-  status: string;
+  status: 'DRAFT' | 'PUBLISHED';
   publishedAt?: string;
   stages?: Array<{
     id: string;
@@ -186,9 +253,27 @@ export interface SopVersion {
       defaultDurationDays: number;
       weight: number;
       required: boolean;
-      deliverableRequired: boolean;
-      deliverableName?: string;
       checklistItems: Array<{ id: string; name: string; required: boolean }>;
+      deliverables: Array<{
+        id: string;
+        stableKey: string;
+        name: string;
+        description?: string;
+        required: boolean;
+        sortOrder: number;
+        reviewMode: 'AI_WITH_HUMAN_OVERRIDE' | 'AI_THEN_HUMAN_REQUIRED' | 'HUMAN_ONLY';
+        aiAutoApproveThreshold?: number;
+        aiReviewInstruction?: string;
+        templates: DeliverableTemplateFile[];
+        reviewCriteria: Array<{
+          id: string;
+          name: string;
+          description?: string;
+          required: boolean;
+          weight: number;
+          sortOrder: number;
+        }>;
+      }>;
     }>;
   }>;
 }
@@ -245,4 +330,51 @@ export interface AuditRecord {
   ipAddress?: string;
   createdAt: string;
   user?: UserRef;
+}
+
+export interface ProjectChangeRequest {
+  id: string;
+  projectId: string;
+  code: string;
+  title: string;
+  description: string;
+  changeType: string;
+  reason: string;
+  source: string;
+  status:
+    | 'DRAFT'
+    | 'ANALYZING'
+    | 'PENDING_APPROVAL'
+    | 'APPROVED'
+    | 'REJECTED'
+    | 'APPLYING'
+    | 'APPLIED'
+    | 'CANCELLED'
+    | 'FAILED';
+  requestedBy: UserRef;
+  approver: UserRef;
+  approvalComment?: string;
+  aiImpactSummary?: string | null;
+  operations?: Array<{
+    id: string;
+    operationType: string;
+    entityId?: string;
+    payload: Record<string, unknown>;
+    appliedAt?: string;
+  }>;
+  _count?: { operations: number };
+  baseline?: { id: string; version: number } | null;
+  createdAt: string;
+}
+
+export interface NotificationRecord {
+  id: string;
+  projectId?: string | null;
+  type: string;
+  title: string;
+  content: string;
+  resourceType?: string;
+  resourceId?: string;
+  readAt?: string | null;
+  createdAt: string;
 }

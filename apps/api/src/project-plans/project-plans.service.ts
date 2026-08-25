@@ -2,181 +2,161 @@ import { createHash } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { stableJson } from '@pmp/shared-utils';
-import type { RequestUser } from '../common/types';
 import { ProjectScopeService } from '../auth/project-scope.service';
+import type { RequestUser } from '../common/types';
+import { DeliverableReviewDecisionService } from '../documents/deliverable-review-decision.service';
+import { STORAGE_PROVIDER, type StorageProvider } from '../documents/storage.provider';
 import { PrismaService } from '../prisma/prisma.service';
 import { assertProjectWritable } from '../projects/project-mutation';
-import type { CompleteChecklistDto, GeneratePlanDto, SyncPlanDto, UpdatePlanTaskDto } from './dto';
+import type { GeneratePlanDto, SyncPlanDto } from './dto';
 import { buildPlanDiff } from './plan-diff';
-import { ProgressService } from './progress.service';
 
-type PlanTree = Prisma.ProjectPlanGetPayload<{
-  include: {
-    stages: {
-      include: {
-        tasks: {
-          include: { checklistItems: true; _count: { select: { tasks: true; documents: true } } };
-        };
-      };
-    };
-  };
-}>;
-type VersionTree = Prisma.SopVersionGetPayload<{
-  include: {
-    template: true;
-    stages: { include: { tasks: { include: { checklistItems: true } } } };
-  };
-}>;
+const planInclude = Prisma.validator<Prisma.ProjectPlanInclude>()({
+  project: { select: { managerUserId: true, status: true } },
+  stages: {
+    orderBy: { sortOrder: 'asc' },
+    include: {
+      workItems: {
+        orderBy: { sortOrder: 'asc' },
+        include: {
+          owner: { select: { id: true, displayName: true } },
+          checklistItems: { orderBy: { sortOrder: 'asc' } },
+          deliverables: {
+            orderBy: { sortOrder: 'asc' },
+            include: {
+              templates: { orderBy: { createdAt: 'asc' } },
+              reviewCriteria: { orderBy: { sortOrder: 'asc' } },
+              documents: {
+                where: { deletedAt: null },
+                include: {
+                  versions: {
+                    orderBy: { createdAt: 'desc' },
+                    include: {
+                      reviews: {
+                        orderBy: { createdAt: 'desc' },
+                        include: {
+                          findings: { orderBy: { sortOrder: 'asc' } },
+                          criterionResults: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+const versionInclude = Prisma.validator<Prisma.SopVersionInclude>()({
+  template: true,
+  stages: {
+    orderBy: { sortOrder: 'asc' },
+    include: {
+      tasks: {
+        orderBy: { sortOrder: 'asc' },
+        include: {
+          checklistItems: { orderBy: { sortOrder: 'asc' } },
+          deliverables: {
+            orderBy: { sortOrder: 'asc' },
+            include: { templates: true, reviewCriteria: { orderBy: { sortOrder: 'asc' } } },
+          },
+        },
+      },
+    },
+  },
+});
+
+type VersionTree = Prisma.SopVersionGetPayload<{ include: typeof versionInclude }>;
 
 @Injectable()
 export class ProjectPlansService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scope: ProjectScopeService,
-    private readonly progress: ProgressService,
+    private readonly reviewDecision: DeliverableReviewDecisionService,
+    @Inject(STORAGE_PROVIDER) private readonly storage: StorageProvider,
   ) {}
 
   async get(user: RequestUser, projectId: string) {
     await this.scope.assert(user, projectId);
     const plan = await this.loadPlan(projectId);
     if (!plan) throw this.notFound();
-    return plan;
+    return this.present(plan);
   }
 
   async generate(user: RequestUser, projectId: string, dto: GeneratePlanDto) {
     await this.scope.assert(user, projectId);
-    const [project, version, existing] = await Promise.all([
-      this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null } }),
-      this.loadVersion(dto.sopVersionId),
-      this.prisma.projectPlan.findUnique({ where: { projectId } }),
-    ]);
-    if (!project) throw new NotFoundException({ code: 'PROJECT_NOT_FOUND', message: '项目不存在' });
+    const version = await this.loadVersion(dto.sopVersionId);
     if (!version || version.status !== 'PUBLISHED')
       throw new BadRequestException({
         code: 'SOP_VERSION_NOT_PUBLISHED',
         message: '只能使用已发布的 SOP 版本',
       });
-    if (existing)
-      throw new ConflictException({
-        code: 'PROJECT_PLAN_EXISTS',
-        message: '项目已有实施计划，请使用同步功能',
-      });
-    let cursor = project.plannedStartDate ?? new Date();
-    const stageCreates = version.stages.map((stage) => {
-      const stageStart = cursor;
-      const stageEnd = this.addDays(stageStart, Math.max(1, stage.defaultDurationDays) - 1);
-      let taskCursor = stageStart;
-      const tasks = stage.tasks.map((task) => {
-        const taskStart = taskCursor;
-        const taskEnd = this.addDays(taskStart, Math.max(1, task.defaultDurationDays) - 1);
-        taskCursor = this.addDays(taskEnd, 1);
-        return {
-          sourceTaskId: task.id,
-          sourceTaskKey: task.stableKey,
-          name: task.name,
-          description: task.description,
-          sortOrder: task.sortOrder,
-          weight: task.weight,
-          required: task.required,
-          deliverableRequired: task.deliverableRequired,
-          deliverableName: task.deliverableName,
-          plannedStartDate: taskStart,
-          plannedEndDate: taskEnd,
-          checklistItems: {
-            create: task.checklistItems.map((item) => ({
-              sourceItemId: item.id,
-              sourceItemKey: item.stableKey,
-              name: item.name,
-              sortOrder: item.sortOrder,
-              required: item.required,
-            })),
-          },
-        };
-      });
-      cursor = this.addDays(stageEnd, 1);
-      return {
-        sourceStageId: stage.id,
-        sourceStageKey: stage.stableKey,
-        name: stage.name,
-        description: stage.description,
-        sortOrder: stage.sortOrder,
-        weight: stage.weight,
-        plannedStartDate: stageStart,
-        plannedEndDate: stageEnd,
-        tasks: { create: tasks },
-      };
-    });
     await this.prisma.$transaction(async (tx) => {
       await assertProjectWritable(tx, projectId);
-      await tx.projectPlan.create({
-        data: {
-          projectId,
-          sourceSopVersionId: version.id,
-          name: `${version.template.name} ${version.version}`,
-          stages: { create: stageCreates },
+      const project = await tx.project.findFirst({ where: { id: projectId, deletedAt: null } });
+      if (!project)
+        throw new NotFoundException({ code: 'PROJECT_NOT_FOUND', message: '项目不存在' });
+
+      const existingPlan = await tx.projectPlan.findUnique({
+        where: { projectId },
+        include: {
+          stages: {
+            orderBy: { sortOrder: 'asc' },
+            include: {
+              workItems: {
+                include: {
+                  checklistItems: { select: { completed: true } },
+                  documents: { where: { deletedAt: null }, select: { id: true } },
+                },
+              },
+            },
+          },
         },
       });
+
+      if (!existingPlan) {
+        await this.createPlan(tx, project, version, user.id);
+        return;
+      }
+
+      if (!this.canAdoptTemporaryPlan(existingPlan))
+        throw new ConflictException({
+          code: 'PROJECT_PLAN_EXISTS',
+          message: '项目已有正式执行计划或已有执行记录，请使用同步或项目变更功能',
+        });
+
+      await this.adoptTemporaryPlan(tx, existingPlan, project, version, user.id);
     });
     return this.get(user, projectId);
   }
 
-  async updateTask(user: RequestUser, id: string, dto: UpdatePlanTaskDto) {
-    const task = await this.prisma.projectPlanTask.findUnique({
+  async downloadDeliverableTemplate(user: RequestUser, id: string) {
+    const template = await this.prisma.projectDeliverableTemplate.findUnique({
       where: { id },
-      include: { stage: { include: { plan: true } } },
+      include: { projectDeliverable: { include: { workItem: true } } },
     });
-    if (!task)
-      throw new NotFoundException({ code: 'PLAN_TASK_NOT_FOUND', message: '计划节点不存在' });
-    await this.scope.assert(user, task.stage.plan.projectId);
-    const start = dto.plannedStartDate ?? task.plannedStartDate;
-    const end = dto.plannedEndDate ?? task.plannedEndDate;
-    if (start && end && start > end)
-      throw new BadRequestException({
-        code: 'PLAN_TASK_DATE_INVALID',
-        message: '计划开始日期不能晚于结束日期',
+    if (!template)
+      throw new NotFoundException({
+        code: 'PROJECT_DELIVERABLE_TEMPLATE_NOT_FOUND',
+        message: '项目交付物模板不存在',
       });
-    if (dto.ownerUserId) {
-      const membership = await this.prisma.projectMember.count({
-        where: { projectId: task.stage.plan.projectId, userId: dto.ownerUserId },
-      });
-      if (!membership)
-        throw new BadRequestException({
-          code: 'PLAN_TASK_OWNER_INVALID',
-          message: '负责人必须是项目成员',
-        });
-    }
-    return this.prisma.$transaction(async (tx) => {
-      await assertProjectWritable(tx, task.stage.plan.projectId);
-      return tx.projectPlanTask.update({ where: { id }, data: dto });
-    });
-  }
-
-  async completeChecklist(user: RequestUser, id: string, dto: CompleteChecklistDto) {
-    const item = await this.prisma.projectChecklistItem.findUnique({
-      where: { id },
-      include: { task: { include: { stage: { include: { plan: true } } } } },
-    });
-    if (!item)
-      throw new NotFoundException({ code: 'CHECKLIST_ITEM_NOT_FOUND', message: '检查项不存在' });
-    await this.scope.assert(user, item.task.stage.plan.projectId);
-    await this.prisma.$transaction(async (tx) => {
-      await assertProjectWritable(tx, item.task.stage.plan.projectId);
-      await tx.projectChecklistItem.update({
-        where: { id },
-        data: {
-          completed: dto.completed,
-          completedAt: dto.completed ? new Date() : null,
-          completedById: dto.completed ? user.id : null,
-        },
-      });
-      await this.progress.recomputeFromChecklist(item.planTaskId, tx);
-    });
-    return this.prisma.projectChecklistItem.findUnique({ where: { id } });
+    await this.scope.assert(user, template.projectDeliverable.workItem.projectId);
+    return {
+      buffer: await this.storage.get(template.objectKey),
+      fileName: template.fileName,
+      mimeType: template.mimeType,
+    };
   }
 
   async previewSync(user: RequestUser, projectId: string, sopVersionId: string) {
@@ -191,7 +171,11 @@ export class ProjectPlansService {
         code: 'SOP_VERSION_NOT_PUBLISHED',
         message: '目标 SOP 版本未发布',
       });
-    const diff = buildPlanDiff(plan.stages, version.stages);
+    const currentStages = plan.stages.map((stage) => ({
+      ...stage,
+      tasks: stage.workItems.map((item) => ({ ...item, sourceTaskKey: item.sourceSopTaskKey })),
+    }));
+    const diff = buildPlanDiff(currentStages, version.stages);
     return {
       fromVersionId: plan.sourceSopVersionId,
       toVersionId: version.id,
@@ -207,281 +191,270 @@ export class ProjectPlansService {
         code: 'SOP_SYNC_DIFF_CHANGED',
         message: 'SOP 同步差异已变化，请重新预览并确认',
       });
-    const plan = await this.loadPlan(projectId);
     const version = await this.loadVersion(dto.sopVersionId);
-    if (!plan || !version) throw this.notFound();
-    await this.applySync(plan, version);
-    await this.progress.recomputePlan(plan.id);
+    if (!version) throw this.notFound();
+    await this.prisma.$transaction(async (tx) => {
+      await assertProjectWritable(tx, projectId);
+      const project = await tx.project.findUnique({ where: { id: projectId } });
+      if (!project)
+        throw new NotFoundException({ code: 'PROJECT_NOT_FOUND', message: '项目不存在' });
+      if (!['DRAFT', 'NOT_STARTED'].includes(project.status))
+        throw new ConflictException({
+          code: 'SOP_SYNC_REQUIRES_CHANGE_REQUEST',
+          message: '已开始项目必须通过项目变更应用 SOP 差异',
+        });
+      const activity = await tx.projectWorkItem.count({
+        where: {
+          projectId,
+          OR: [
+            { progress: { gt: 0 } },
+            { status: { not: 'TODO' } },
+            { checklistItems: { some: { completed: true } } },
+            { documents: { some: { deletedAt: null } } },
+          ],
+        },
+      });
+      if (activity)
+        throw new ConflictException({
+          code: 'SOP_SYNC_REQUIRES_CHANGE_REQUEST',
+          message: '项目已有执行记录，必须通过项目变更同步 SOP',
+        });
+      await tx.projectPlan.delete({ where: { projectId } });
+      await this.createPlan(tx, project, version, user.id);
+    });
     return { ...(await this.get(user, projectId)), appliedDiff: preview.diff };
   }
 
-  private async applySync(plan: PlanTree, version: VersionTree): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      await assertProjectWritable(tx, plan.projectId);
-      for (const [index, stage] of plan.stages.entries()) {
-        await tx.projectPlanStage.update({
-          where: { id: stage.id },
-          data: { sortOrder: 10_000 + index },
-        });
-        for (const [taskIndex, task] of stage.tasks.entries()) {
-          await tx.projectPlanTask.update({
-            where: { id: task.id },
-            data: { sortOrder: 10_000 + taskIndex },
-          });
-          for (const [itemIndex, item] of task.checklistItems.entries())
-            await tx.projectChecklistItem.update({
-              where: { id: item.id },
-              data: { sortOrder: 10_000 + itemIndex },
-            });
-        }
-      }
-      const oldStages = new Map(
-        plan.stages
-          .filter((stage) => stage.sourceStageKey)
-          .map((stage) => [stage.sourceStageKey!, stage]),
-      );
-      const oldTasks = new Map(
-        plan.stages
-          .flatMap((stage) => stage.tasks)
-          .filter((task) => task.sourceTaskKey)
-          .map((task) => [task.sourceTaskKey!, task]),
-      );
-      const targetStageKeys = new Set(version.stages.map((stage) => stage.stableKey));
-      const targetTaskKeys = new Set(
-        version.stages.flatMap((stage) => stage.tasks.map((task) => task.stableKey)),
-      );
-      const targetItemKeys = new Set(
-        version.stages.flatMap((stage) =>
-          stage.tasks.flatMap((task) => task.checklistItems.map((item) => item.stableKey)),
+  private canAdoptTemporaryPlan(plan: {
+    sourceSopVersionId: string | null;
+    stages: Array<{
+      isCustom: boolean;
+      sourceStageId: string | null;
+      sourceStageKey: string | null;
+      workItems: Array<{
+        sourceType: string;
+        isCustom: boolean;
+        status: string;
+        progress: number;
+        checklistItems: Array<{ completed: boolean }>;
+        documents: Array<{ id: string }>;
+      }>;
+    }>;
+  }): boolean {
+    if (plan.sourceSopVersionId) return false;
+    return plan.stages.every(
+      (stage) =>
+        stage.isCustom &&
+        !stage.sourceStageId &&
+        !stage.sourceStageKey &&
+        stage.workItems.every(
+          (item) =>
+            item.sourceType === 'MANUAL' &&
+            item.isCustom &&
+            item.status === 'TODO' &&
+            item.progress === 0 &&
+            !item.checklistItems.some((check) => check.completed) &&
+            item.documents.length === 0,
         ),
-      );
-
-      for (const targetStage of version.stages) {
-        const oldStage = oldStages.get(targetStage.stableKey);
-        const stage = oldStage
-          ? await tx.projectPlanStage.update({
-              where: { id: oldStage.id },
-              data: {
-                sourceStageId: targetStage.id,
-                sourceStageKey: targetStage.stableKey,
-                name: targetStage.name,
-                description: targetStage.description,
-                sortOrder: targetStage.sortOrder,
-                weight: targetStage.weight,
-              },
-            })
-          : await tx.projectPlanStage.create({
-              data: {
-                planId: plan.id,
-                sourceStageId: targetStage.id,
-                sourceStageKey: targetStage.stableKey,
-                name: targetStage.name,
-                description: targetStage.description,
-                sortOrder: targetStage.sortOrder,
-                weight: targetStage.weight,
-              },
-            });
-        for (const targetTask of targetStage.tasks) {
-          const oldTask = oldTasks.get(targetTask.stableKey);
-          const task = oldTask
-            ? await tx.projectPlanTask.update({
-                where: { id: oldTask.id },
-                data: {
-                  planStageId: stage.id,
-                  sourceTaskId: targetTask.id,
-                  sourceTaskKey: targetTask.stableKey,
-                  name: targetTask.name,
-                  description: targetTask.description,
-                  sortOrder: targetTask.sortOrder,
-                  weight: targetTask.weight,
-                  required: targetTask.required,
-                  deliverableRequired: targetTask.deliverableRequired,
-                  deliverableName: targetTask.deliverableName,
-                },
-              })
-            : await tx.projectPlanTask.create({
-                data: {
-                  planStageId: stage.id,
-                  sourceTaskId: targetTask.id,
-                  sourceTaskKey: targetTask.stableKey,
-                  name: targetTask.name,
-                  description: targetTask.description,
-                  sortOrder: targetTask.sortOrder,
-                  weight: targetTask.weight,
-                  required: targetTask.required,
-                  deliverableRequired: targetTask.deliverableRequired,
-                  deliverableName: targetTask.deliverableName,
-                },
-              });
-          const oldItems = new Map(
-            (oldTask?.checklistItems ?? [])
-              .filter((item) => item.sourceItemKey)
-              .map((item) => [item.sourceItemKey!, item]),
-          );
-          for (const targetItem of targetTask.checklistItems) {
-            const oldItem = oldItems.get(targetItem.stableKey);
-            if (oldItem)
-              await tx.projectChecklistItem.update({
-                where: { id: oldItem.id },
-                data: {
-                  sourceItemId: targetItem.id,
-                  sourceItemKey: targetItem.stableKey,
-                  name: targetItem.name,
-                  sortOrder: targetItem.sortOrder,
-                  required: targetItem.required,
-                },
-              });
-            else
-              await tx.projectChecklistItem.create({
-                data: {
-                  planTaskId: task.id,
-                  sourceItemId: targetItem.id,
-                  sourceItemKey: targetItem.stableKey,
-                  name: targetItem.name,
-                  sortOrder: targetItem.sortOrder,
-                  required: targetItem.required,
-                },
-              });
-          }
-        }
-      }
-
-      for (const stage of plan.stages)
-        for (const task of stage.tasks)
-          for (const item of task.checklistItems) {
-            if (item.sourceItemKey && !targetItemKeys.has(item.sourceItemKey)) {
-              if (item.completed || item.isCustom)
-                await tx.projectChecklistItem.update({
-                  where: { id: item.id },
-                  data: { sourceItemId: null, sourceItemKey: null, isCustom: true },
-                });
-              else await tx.projectChecklistItem.delete({ where: { id: item.id } });
-            }
-          }
-      for (const stage of plan.stages)
-        for (const task of stage.tasks) {
-          if (task.sourceTaskKey && !targetTaskKeys.has(task.sourceTaskKey)) {
-            const preserve =
-              task.progress > 0 ||
-              Boolean(task.ownerUserId || task.actualStartDate || task.actualEndDate) ||
-              task.isCustom ||
-              task._count.tasks > 0 ||
-              task._count.documents > 0;
-            if (preserve)
-              await tx.projectPlanTask.update({
-                where: { id: task.id },
-                data: { sourceTaskId: null, sourceTaskKey: null, isCustom: true },
-              });
-            else await tx.projectPlanTask.delete({ where: { id: task.id } });
-          }
-        }
-      for (const stage of plan.stages) {
-        if (stage.sourceStageKey && !targetStageKeys.has(stage.sourceStageKey)) {
-          const remaining = await tx.projectPlanTask.count({ where: { planStageId: stage.id } });
-          if (remaining > 0 || stage.progress > 0 || stage.isCustom)
-            await tx.projectPlanStage.update({
-              where: { id: stage.id },
-              data: { sourceStageId: null, sourceStageKey: null, isCustom: true },
-            });
-          else await tx.projectPlanStage.delete({ where: { id: stage.id } });
-        }
-      }
-      await tx.projectPlan.update({
-        where: { id: plan.id },
-        data: {
-          sourceSopVersionId: version.id,
-          syncedAt: new Date(),
-          name: `${version.template.name} ${version.version}`,
-        },
-      });
-      await this.reindexCustomNodes(tx, plan.id, version);
-    });
+    );
   }
 
-  private async reindexCustomNodes(
+  private async adoptTemporaryPlan(
+    tx: Prisma.TransactionClient,
+    plan: {
+      id: string;
+      stages: Array<{ id: string; sortOrder: number }>;
+    },
+    project: { id: string; managerUserId: string; plannedStartDate: Date | null },
+    version: VersionTree,
+    userId: string,
+  ) {
+    const maxSourceSortOrder = version.stages.reduce(
+      (max, stage) => Math.max(max, stage.sortOrder),
+      -1,
+    );
+    const maxExistingSortOrder = plan.stages.reduce(
+      (max, stage) => Math.max(max, stage.sortOrder),
+      -1,
+    );
+    const temporaryBase = Math.max(maxSourceSortOrder, maxExistingSortOrder) + plan.stages.length + 1000;
+
+    for (const [index, stage] of plan.stages.entries())
+      await tx.projectStage.update({
+        where: { id: stage.id },
+        data: { sortOrder: temporaryBase + index },
+      });
+
+    await tx.projectPlan.update({
+      where: { id: plan.id },
+      data: {
+        sourceSopVersionId: version.id,
+        name: `${version.template.name} ${version.version}`,
+        progress: 0,
+        generatedAt: new Date(),
+        syncedAt: null,
+      },
+    });
+
+    await this.createPlanStages(tx, plan.id, project, version, userId);
+
+    for (const [index, stage] of plan.stages.entries())
+      await tx.projectStage.update({
+        where: { id: stage.id },
+        data: { sortOrder: maxSourceSortOrder + 1 + index },
+      });
+  }
+
+  private async createPlan(
+    tx: Prisma.TransactionClient,
+    project: { id: string; managerUserId: string; plannedStartDate: Date | null },
+    version: VersionTree,
+    userId: string,
+  ) {
+    const plan = await tx.projectPlan.create({
+      data: {
+        projectId: project.id,
+        sourceSopVersionId: version.id,
+        name: `${version.template.name} ${version.version}`,
+      },
+    });
+    await this.createPlanStages(tx, plan.id, project, version, userId);
+    return plan;
+  }
+
+  private async createPlanStages(
     tx: Prisma.TransactionClient,
     planId: string,
+    project: { id: string; managerUserId: string; plannedStartDate: Date | null },
     version: VersionTree,
-  ): Promise<void> {
-    const stages = await tx.projectPlanStage.findMany({
-      where: { planId },
-      include: { tasks: { include: { checklistItems: true }, orderBy: { sortOrder: 'asc' } } },
-      orderBy: { sortOrder: 'asc' },
-    });
-    let customStageOrder = version.stages.length;
-    for (const stage of stages.filter((item) => item.isCustom))
-      await tx.projectPlanStage.update({
-        where: { id: stage.id },
-        data: { sortOrder: customStageOrder++ },
+    userId: string,
+  ) {
+    let cursor = project.plannedStartDate ?? new Date();
+    for (const sourceStage of version.stages) {
+      const stageStart = cursor;
+      const stageEnd = this.addDays(stageStart, Math.max(1, sourceStage.defaultDurationDays) - 1);
+      const stage = await tx.projectStage.create({
+        data: {
+          planId,
+          sourceStageId: sourceStage.id,
+          sourceStageKey: sourceStage.stableKey,
+          name: sourceStage.name,
+          description: sourceStage.description,
+          sortOrder: sourceStage.sortOrder,
+          weight: sourceStage.weight,
+          plannedStartDate: stageStart,
+          plannedEndDate: stageEnd,
+        },
       });
-    for (const stage of stages) {
-      const targetCount =
-        version.stages.find((item) => item.stableKey === stage.sourceStageKey)?.tasks.length ?? 0;
-      let customTaskOrder = targetCount;
-      for (const task of stage.tasks.filter((item) => item.isCustom))
-        await tx.projectPlanTask.update({
-          where: { id: task.id },
-          data: { sortOrder: customTaskOrder++ },
+      let taskCursor = stageStart;
+      for (const sourceTask of sourceStage.tasks) {
+        const taskStart = taskCursor;
+        const taskEnd = this.addDays(taskStart, Math.max(1, sourceTask.defaultDurationDays) - 1);
+        taskCursor = this.addDays(taskEnd, 1);
+        const workItem = await tx.projectWorkItem.create({
+          data: {
+            projectId: project.id,
+            planStageId: stage.id,
+            sourceSopTaskId: sourceTask.id,
+            sourceSopTaskKey: sourceTask.stableKey,
+            name: sourceTask.name,
+            description: sourceTask.description,
+            ownerUserId: project.managerUserId,
+            plannedStartDate: taskStart,
+            plannedEndDate: taskEnd,
+            required: sourceTask.required,
+            sourceType: 'SOP',
+            sortOrder: sourceTask.sortOrder,
+            weight: sourceTask.weight,
+            createdById: userId,
+          },
         });
-      for (const task of stage.tasks) {
-        const source = version.stages
-          .flatMap((item) => item.tasks)
-          .find((item) => item.stableKey === task.sourceTaskKey);
-        let customItemOrder = source?.checklistItems.length ?? 0;
-        for (const item of task.checklistItems.filter((entry) => entry.isCustom))
-          await tx.projectChecklistItem.update({
-            where: { id: item.id },
-            data: { sortOrder: customItemOrder++ },
+        if (sourceTask.checklistItems.length)
+          await tx.projectChecklistItem.createMany({
+            data: sourceTask.checklistItems.map((item) => ({
+              workItemId: workItem.id,
+              sourceItemId: item.id,
+              sourceItemKey: item.stableKey,
+              name: item.name,
+              sortOrder: item.sortOrder,
+              required: item.required,
+            })),
           });
+        for (const sourceDeliverable of sourceTask.deliverables) {
+          await tx.projectDeliverable.create({
+            data: {
+              workItemId: workItem.id,
+              sourceDeliverableId: sourceDeliverable.id,
+              sourceDeliverableKey: sourceDeliverable.stableKey,
+              name: sourceDeliverable.name,
+              description: sourceDeliverable.description,
+              required: sourceDeliverable.required,
+              sortOrder: sourceDeliverable.sortOrder,
+              reviewMode: sourceDeliverable.reviewMode,
+              aiAutoApproveThreshold: sourceDeliverable.aiAutoApproveThreshold,
+              aiReviewInstruction: sourceDeliverable.aiReviewInstruction,
+              templates: {
+                create: sourceDeliverable.templates.map((template) => ({
+                  sourceTemplateId: template.id,
+                  fileName: template.fileName,
+                  objectKey: template.objectKey,
+                  mimeType: template.mimeType,
+                  size: template.size,
+                  checksum: template.checksum,
+                })),
+              },
+              reviewCriteria: {
+                create: sourceDeliverable.reviewCriteria.map((criterion) => ({
+                  sourceCriterionId: criterion.id,
+                  sourceCriterionKey: criterion.stableKey,
+                  name: criterion.name,
+                  description: criterion.description,
+                  required: criterion.required,
+                  weight: criterion.weight,
+                  sortOrder: criterion.sortOrder,
+                })),
+              },
+            },
+          });
+        }
       }
+      cursor = this.addDays(stageEnd, 1);
     }
   }
 
-  private loadPlan(projectId: string) {
-    return this.prisma.projectPlan.findUnique({
-      where: { projectId },
-      include: {
-        sourceVersion: { include: { template: true } },
-        stages: {
-          include: {
-            tasks: {
-              include: {
-                checklistItems: { orderBy: { sortOrder: 'asc' } },
-                owner: { select: { id: true, displayName: true } },
-                _count: { select: { tasks: true, documents: true } },
-              },
-              orderBy: { sortOrder: 'asc' },
-            },
+  private async loadPlan(projectId: string) {
+    return this.prisma.projectPlan.findUnique({ where: { projectId }, include: planInclude });
+  }
+  private async loadVersion(id: string) {
+    return this.prisma.sopVersion.findUnique({ where: { id }, include: versionInclude });
+  }
+  private present(plan: NonNullable<Awaited<ReturnType<ProjectPlansService['loadPlan']>>>) {
+    return {
+      ...plan,
+      stages: plan.stages.map((stage) => ({
+        ...stage,
+        workItems: stage.workItems.map((workItem) => ({
+          ...workItem,
+          checklistSummary: {
+            completed: workItem.checklistItems.filter((item) => item.required && item.completed)
+              .length,
+            total: workItem.checklistItems.filter((item) => item.required).length,
           },
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-    });
+          deliverables: workItem.deliverables.map((deliverable) => ({
+            ...deliverable,
+            ...this.reviewDecision.decide(deliverable),
+          })),
+        })),
+      })),
+    };
   }
-  private loadVersion(id: string) {
-    return this.prisma.sopVersion.findUnique({
-      where: { id },
-      include: {
-        template: true,
-        stages: {
-          include: {
-            tasks: {
-              include: { checklistItems: { orderBy: { sortOrder: 'asc' } } },
-              orderBy: { sortOrder: 'asc' },
-            },
-          },
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-    });
+  private addDays(date: Date, days: number) {
+    const result = new Date(date);
+    result.setDate(result.getDate() + days);
+    return result;
   }
-  private hash(diff: unknown): string {
-    return createHash('sha256').update(stableJson(diff)).digest('hex');
-  }
-  private addDays(date: Date, days: number): Date {
-    const value = new Date(date);
-    value.setUTCDate(value.getUTCDate() + days);
-    return value;
+  private hash(value: unknown) {
+    return createHash('sha256').update(stableJson(value)).digest('hex');
   }
   private notFound() {
     return new NotFoundException({ code: 'PROJECT_PLAN_NOT_FOUND', message: '项目实施计划不存在' });

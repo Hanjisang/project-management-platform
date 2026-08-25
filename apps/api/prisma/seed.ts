@@ -13,6 +13,10 @@ const permissionNames: Record<string, string> = {
   'project.pause': '暂停恢复项目',
   'project.close': '结项',
   'project.member.manage': '管理项目成员',
+  'project.change.view': '查看项目变更',
+  'project.change.create': '创建项目变更',
+  'project.change.approve': '审批项目变更',
+  'project.change.apply': '应用项目变更',
 };
 
 async function main(): Promise<void> {

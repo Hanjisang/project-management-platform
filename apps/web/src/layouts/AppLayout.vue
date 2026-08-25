@@ -2,10 +2,13 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { useAuthStore } from '../stores/auth';
+import { notificationsApi } from '../api/notifications.api';
 import { PERMISSIONS } from '@pmp/shared-constants';
 import {
   DataAnalysis,
+  Bell,
   Document,
   FolderOpened,
   House,
@@ -24,6 +27,16 @@ import {
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
+const queryClient = useQueryClient();
+const notifications = useQuery({
+  queryKey: ['notifications'],
+  queryFn: notificationsApi.list,
+  refetchInterval: 60_000,
+});
+const markRead = useMutation({
+  mutationFn: notificationsApi.read,
+  onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+});
 const mobileOpen = ref(false);
 const collapsed = ref(false);
 const items = [
@@ -79,6 +92,10 @@ async function logout(): Promise<void> {
   await ElMessageBox.confirm('确定退出当前账号？', '退出登录', { type: 'warning' });
   await auth.logout();
   await router.replace('/login');
+}
+async function openNotification(item: { id: string; projectId?: string | null }): Promise<void> {
+  await markRead.mutateAsync(item.id);
+  if (item.projectId) await router.push(`/projects/${item.projectId}?tab=changes`);
 }
 watch(
   () => route.fullPath,
@@ -170,19 +187,49 @@ watch(
           <div class="page-eyebrow">医疗信息化实施中心</div>
           <h1>{{ route.meta.title }}</h1>
         </div>
-        <el-dropdown trigger="click"
-          ><button class="user-button">
-            <span class="user-avatar">{{ auth.user?.displayName.slice(0, 1) }}</span
-            ><span>{{ auth.user?.displayName }}</span></button
-          ><template #dropdown
-            ><el-dropdown-menu
-              ><el-dropdown-item disabled>{{ auth.user?.username }}</el-dropdown-item
-              ><el-dropdown-item divided @click="logout"
-                >退出登录</el-dropdown-item
-              ></el-dropdown-menu
-            ></template
-          ></el-dropdown
-        >
+        <div class="topbar-actions">
+          <el-dropdown trigger="click" placement="bottom-end">
+            <el-badge
+              :value="notifications.data.value?.unread ?? 0"
+              :hidden="!(notifications.data.value?.unread ?? 0)"
+            >
+              <button class="icon-button" aria-label="通知">
+                <el-icon><Bell /></el-icon>
+              </button>
+            </el-badge>
+            <template #dropdown>
+              <el-dropdown-menu class="notification-menu">
+                <el-dropdown-item
+                  v-for="item in notifications.data.value?.items ?? []"
+                  :key="item.id"
+                  :class="{ 'notification-unread': !item.readAt }"
+                  @click="openNotification(item)"
+                >
+                  <span class="notification-entry"
+                    ><strong>{{ item.title }}</strong
+                    ><small>{{ item.content }}</small></span
+                  >
+                </el-dropdown-item>
+                <el-dropdown-item v-if="!notifications.data.value?.items.length" disabled
+                  >暂无通知</el-dropdown-item
+                >
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-dropdown trigger="click"
+            ><button class="user-button">
+              <span class="user-avatar">{{ auth.user?.displayName.slice(0, 1) }}</span
+              ><span>{{ auth.user?.displayName }}</span></button
+            ><template #dropdown
+              ><el-dropdown-menu
+                ><el-dropdown-item disabled>{{ auth.user?.username }}</el-dropdown-item
+                ><el-dropdown-item divided @click="logout"
+                  >退出登录</el-dropdown-item
+                ></el-dropdown-menu
+              ></template
+            ></el-dropdown
+          >
+        </div>
       </header>
       <main id="main-content" class="page-content" tabindex="-1"><router-view /></main>
     </div>

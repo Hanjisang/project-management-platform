@@ -13,7 +13,7 @@ export const aiAnalysisSchema = z
     progressUpdates: z
       .array(
         z.object({
-          planTaskId: z.string(),
+          workItemId: z.string(),
           progress: z.number().int().min(0).max(100),
           evidence: z.string().max(2000),
         }),
@@ -90,9 +90,9 @@ export const aiAnalysisJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['planTaskId', 'progress', 'evidence'],
+        required: ['workItemId', 'progress', 'evidence'],
         properties: {
-          planTaskId: { type: 'string' },
+          workItemId: { type: 'string' },
           progress: { type: 'integer', minimum: 0, maximum: 100 },
           evidence: { type: 'string' },
         },

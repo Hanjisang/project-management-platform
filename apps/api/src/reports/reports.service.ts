@@ -78,7 +78,7 @@ export class ReportsService {
     });
     const ids = projects.map((project) => project.id);
     const [tasks, issues, reports, messages] = await Promise.all([
-      this.prisma.task.findMany({
+      this.prisma.projectWorkItem.findMany({
         where: {
           projectId: { in: ids },
           updatedAt: {
@@ -86,7 +86,7 @@ export class ReportsService {
             lte: businessDayEndInstant(dto.weekEnd),
           },
         },
-        select: { projectId: true, title: true, status: true, progress: true },
+        select: { projectId: true, name: true, status: true, progress: true },
       }),
       this.prisma.issue.findMany({
         where: {

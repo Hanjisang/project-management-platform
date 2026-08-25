@@ -1,7 +1,9 @@
 # V2 开发状态
 
-截至 2026-08-24，V2 模块化单体、Prisma 迁移、Vue 业务页面、RBAC/项目范围、SOP/计划、任务问题、文档版本审核、消息 AI 待确认、报表、知识库、驾驶舱、审计、钉钉/禅道适配器、Docker、CI 和文档均已实现。
+截至 2026-08-24，V2 Execution Domain Redesign 已实现并部署到本地 Docker：项目执行统一为 ProjectWorkItem，SOP 生成完整快照，交付物采用版本级 AI/人工审查，项目启动生成批准基线，±20% 规则、直接调整日志和 Change Request 审批/事务应用均已接入 API 与 Vue 页面。
 
-RC hardening 复验已通过：全新 MySQL 8.4 数据库可仅依赖 migration + seed 初始化；51/51 单元测试、20/20 真实 MySQL 集成测试、11/11 Playwright E2E、lint、类型检查、格式、生产构建和安全审计全部通过。候选代码已完成 Docker Compose 无缓存重建与空卷启动，MySQL、API、Web 均 healthy；Docker Web 环境的 A–G、权限安全与三种响应式布局合计 11/11 通过，最终 production 配置下 Fake AI 已关闭且三个容器 restart count 均为 0。
+本轮实际门禁：空 MySQL 8.4 执行 5/5 migration + seed 成功；旧四迁移样例库的数据保留升级成功；Prisma schema 与迁移无差异；89/89 单元测试、36/36 真实 MySQL 集成测试、11/11 Playwright E2E 通过；format、lint、全量 typecheck、生产 build、`npm audit --audit-level=high` 全绿。Docker Compose 原位升级后 MySQL/API/Web 均 healthy，`/health` 报告 database up、LocalStorage configured。
 
-外部 AI、钉钉、禅道和 S3 无真实凭证。AI 和禅道以测试 Fake 完成验证，钉钉完成签名、重放与消息幂等测试；生产默认均为 NOT_CONFIGURED。S3 仅保留 StorageProvider 扩展点，当前实际验证的是 LocalStorageProvider。因此结论为 CONDITIONAL PASS，详见 `docs/V2-PRODUCTION-ACCEPTANCE.md`。
+部署库已核对 Execution Redesign migration 完成，原 `tasks`、`project_plan_tasks`、`document_reviews` 表已移除，现有执行数据已进入 `project_work_items`。发布前完整数据库备份保存在 `.backups/pre_execution_redesign_20260824_complete.sql`。
+
+生产环境未配置外部 AI、钉钉和禅道凭证，健康检查如实报告 `configured: false`。AI Fake 只在隔离测试环境启用，生产没有伪结果或 fallback；配置真实 provider 后即可启用交付物自动审查。

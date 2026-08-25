@@ -65,7 +65,7 @@ const planErrorTitle = computed(() => {
             <strong>{{ stage.name }}</strong
             ><span>{{ stage.progress }}% · 权重 {{ stage.weight }}%</span>
           </div>
-          <div v-for="task in stage.tasks" :key="task.id" class="plan-task">
+          <div v-for="task in stage.workItems" :key="task.id" class="plan-task">
             <div style="display: flex; justify-content: space-between; gap: 12px">
               <span>{{ task.name }}</span
               ><StatusTag :value="task.progress === 100 ? 'DONE' : 'IN_PROGRESS'" />

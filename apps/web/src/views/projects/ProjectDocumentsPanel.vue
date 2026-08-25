@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, toRef } from 'vue';
+import { computed, reactive, ref, toRef } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { documentsApi } from '../../api/documents.api';
@@ -20,6 +20,8 @@ const versionDialog = ref(false);
 const versionDocumentId = ref('');
 const versionFile = ref<File>();
 const version = ref('V1.1');
+const statusFilter = ref('ALL');
+const sourceFilter = ref('ALL');
 const form = reactive({ name: '', description: '', version: 'V1.0', required: false });
 function resetUploadForm(): void {
   file.value = undefined;
@@ -29,6 +31,16 @@ const query = useQuery({
   queryKey: projectQueryKey('documents', projectId),
   queryFn: () => documentsApi.list(projectId.value),
 });
+const filteredDocuments = computed(() =>
+  (query.data.value ?? []).filter(
+    (item) =>
+      (statusFilter.value === 'ALL' || item.status === statusFilter.value) &&
+      (sourceFilter.value === 'ALL' ||
+        (sourceFilter.value === 'SOP'
+          ? Boolean(item.projectDeliverable)
+          : !item.projectDeliverable)),
+  ),
+);
 const categories = useQuery({
   queryKey: ['knowledge-categories'],
   queryFn: knowledgeApi.categories,
@@ -126,6 +138,20 @@ async function review(id: string, status: 'APPROVED' | 'REJECTED'): Promise<void
         >上传文档</el-button
       >
     </div>
+    <div class="filters" style="margin-bottom: 12px">
+      <el-select v-model="sourceFilter" style="width: 150px" aria-label="文档来源筛选">
+        <el-option label="全部来源" value="ALL" />
+        <el-option label="SOP 交付物" value="SOP" />
+        <el-option label="项目自建" value="CUSTOM" />
+      </el-select>
+      <el-select v-model="statusFilter" style="width: 150px" aria-label="文档状态筛选">
+        <el-option label="全部状态" value="ALL" />
+        <el-option label="草稿" value="DRAFT" />
+        <el-option label="待审核" value="PENDING_REVIEW" />
+        <el-option label="已通过" value="APPROVED" />
+        <el-option label="已驳回" value="REJECTED" />
+      </el-select>
+    </div>
     <ApiErrorView
       v-if="query.isError.value"
       :error="query.error.value"
@@ -133,29 +159,46 @@ async function review(id: string, status: 'APPROVED' | 'REJECTED'): Promise<void
       @retry="query.refetch()"
     />
     <div v-else class="table-wrap">
-      <el-table :data="query.data.value ?? []"
+      <el-table :data="filteredDocuments"
         ><el-table-column type="expand"
           ><template #default="scope"
             ><div class="panel-body">
               <strong>版本历史</strong>
               <ul>
                 <li v-for="item in scope.row.versions" :key="item.id">
-                  {{ item.version }} · {{ item.fileName }}
-                </li>
-              </ul>
-              <strong>审核记录</strong>
-              <ul>
-                <li v-for="item in scope.row.reviews" :key="item.id">
-                  {{ item.reviewer.displayName }} · {{ item.status }} · {{ item.comment || '-' }}
+                  {{ item.version }} ·
+                  <a :href="documentsApi.downloadUrl(item.id)">{{ item.fileName }}</a>
+                  <ul v-if="item.reviews.length">
+                    <li v-for="review in item.reviews" :key="review.id">
+                      {{
+                        review.reviewType === 'AI' ? 'AI' : (review.reviewer?.displayName ?? '人工')
+                      }}
+                      · {{ review.status
+                      }}<span v-if="review.score !== undefined"> · {{ review.score }} 分</span>
+                      <span v-if="review.summary"> · {{ review.summary }}</span>
+                    </li>
+                  </ul>
                 </li>
               </ul>
             </div>
           </template></el-table-column
         ><el-table-column prop="name" label="文档" min-width="190" /><el-table-column
-          prop="planTask.name"
-          label="计划节点"
-          min-width="150"
-        /><el-table-column label="当前版本" width="110"
+          label="来源"
+          min-width="220"
+          ><template #default="scope">
+            <template v-if="scope.row.projectDeliverable">
+              <el-tag size="small" effect="plain">SOP交付物</el-tag>
+              <div class="muted" style="margin-top: 4px">
+                {{ scope.row.projectDeliverable.workItem.stage.name }} /
+                {{ scope.row.projectDeliverable.workItem.name }} /
+                {{ scope.row.projectDeliverable.name }}
+              </div>
+            </template>
+            <span v-else>项目自建</span>
+          </template></el-table-column
+        ><el-table-column prop="workItem.name" label="执行任务" min-width="150" /><el-table-column
+          label="当前版本"
+          width="110"
           ><template #default="scope">{{
             scope.row.versions[0]?.version ?? '-'
           }}</template></el-table-column
@@ -228,7 +271,7 @@ async function review(id: string, status: 'APPROVED' | 'REJECTED'): Promise<void
           ><el-input v-model="form.description" type="textarea" :rows="3" /></el-form-item
         ><el-form-item
           ><el-checkbox v-model="form.required">设为项目结项必需交付物</el-checkbox></el-form-item
-        ><el-form-item label="文件（最大 20MB）" required
+        ><el-form-item label="文件（最大 50MB）" required
           ><el-upload :auto-upload="false" :limit="1" :on-change="select"
             ><el-button>选择文件</el-button></el-upload
           ></el-form-item

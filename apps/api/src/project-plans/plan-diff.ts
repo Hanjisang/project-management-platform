@@ -8,6 +8,23 @@ interface ChecklistLike {
   sortOrder: number;
   required: boolean;
 }
+interface TemplateLike {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  size: bigint;
+  checksum: string;
+}
+interface DeliverableLike {
+  id: string;
+  stableKey?: string;
+  sourceDeliverableKey?: string | null;
+  name: string;
+  description: string | null;
+  required: boolean;
+  sortOrder: number;
+  templates: TemplateLike[];
+}
 interface TaskLike {
   id: string;
   stableKey?: string;
@@ -17,9 +34,8 @@ interface TaskLike {
   sortOrder: number;
   weight: number;
   required: boolean;
-  deliverableRequired: boolean;
-  deliverableName: string | null;
   checklistItems: ChecklistLike[];
+  deliverables: DeliverableLike[];
 }
 interface StageLike {
   id: string;
@@ -95,8 +111,6 @@ export function buildPlanDiff(
         sortOrder: targetTask.sortOrder,
         weight: targetTask.weight,
         required: targetTask.required,
-        deliverableRequired: targetTask.deliverableRequired,
-        deliverableName: targetTask.deliverableName,
       };
       if (!currentTask)
         diff.push({
@@ -115,8 +129,6 @@ export function buildPlanDiff(
           sortOrder: currentTask.sortOrder,
           weight: currentTask.weight,
           required: currentTask.required,
-          deliverableRequired: currentTask.deliverableRequired,
-          deliverableName: currentTask.deliverableName,
         };
         if (changed(taskBefore, taskAfter))
           diff.push({
@@ -181,6 +193,109 @@ export function buildPlanDiff(
             before: { name: currentItem.name },
             after: null,
           });
+      const currentDeliverables = new Map(
+        (currentTask?.deliverables ?? [])
+          .filter((item) => item.sourceDeliverableKey)
+          .map((item) => [item.sourceDeliverableKey!, item]),
+      );
+      const targetDeliverables = new Map(
+        targetTask.deliverables.map((item) => [item.stableKey!, item]),
+      );
+      for (const targetDeliverable of targetTask.deliverables) {
+        const currentDeliverable = currentDeliverables.get(targetDeliverable.stableKey!);
+        const deliverableAfter = {
+          name: targetDeliverable.name,
+          description: targetDeliverable.description,
+          required: targetDeliverable.required,
+          sortOrder: targetDeliverable.sortOrder,
+        };
+        if (!currentDeliverable)
+          diff.push({
+            operation: 'ADD',
+            entity: 'DELIVERABLE',
+            sourceId: targetDeliverable.id,
+            planId: null,
+            path: `${target.name}/${targetTask.name}/${targetDeliverable.name}`,
+            before: null,
+            after: deliverableAfter,
+          });
+        else {
+          const deliverableBefore = {
+            name: currentDeliverable.name,
+            description: currentDeliverable.description,
+            required: currentDeliverable.required,
+            sortOrder: currentDeliverable.sortOrder,
+          };
+          if (changed(deliverableBefore, deliverableAfter))
+            diff.push({
+              operation: 'MODIFY',
+              entity: 'DELIVERABLE',
+              sourceId: targetDeliverable.id,
+              planId: currentDeliverable.id,
+              path: `${target.name}/${targetTask.name}/${targetDeliverable.name}`,
+              before: deliverableBefore,
+              after: deliverableAfter,
+            });
+        }
+        const currentTemplates = new Map(
+          (currentDeliverable?.templates ?? []).map((item) => [item.fileName, item]),
+        );
+        const targetTemplates = new Map(
+          targetDeliverable.templates.map((item) => [item.fileName, item]),
+        );
+        for (const targetTemplate of targetDeliverable.templates) {
+          const currentTemplate = currentTemplates.get(targetTemplate.fileName);
+          const templateAfter = templateDefinition(targetTemplate);
+          if (!currentTemplate)
+            diff.push({
+              operation: 'ADD',
+              entity: 'TEMPLATE',
+              sourceId: targetTemplate.id,
+              planId: null,
+              path: `${target.name}/${targetTask.name}/${targetDeliverable.name}/${targetTemplate.fileName}`,
+              before: null,
+              after: templateAfter,
+            });
+          else {
+            const templateBefore = templateDefinition(currentTemplate);
+            if (changed(templateBefore, templateAfter))
+              diff.push({
+                operation: 'MODIFY',
+                entity: 'TEMPLATE',
+                sourceId: targetTemplate.id,
+                planId: currentTemplate.id,
+                path: `${target.name}/${targetTask.name}/${targetDeliverable.name}/${targetTemplate.fileName}`,
+                before: templateBefore,
+                after: templateAfter,
+              });
+          }
+        }
+        for (const [fileName, currentTemplate] of currentTemplates)
+          if (!targetTemplates.has(fileName))
+            diff.push({
+              operation: 'REMOVE',
+              entity: 'TEMPLATE',
+              sourceId: null,
+              planId: currentTemplate.id,
+              path: `${target.name}/${targetTask.name}/${targetDeliverable.name}/${fileName}`,
+              before: templateDefinition(currentTemplate),
+              after: null,
+            });
+      }
+      for (const [key, currentDeliverable] of currentDeliverables)
+        if (!targetDeliverables.has(key))
+          diff.push({
+            operation: 'REMOVE',
+            entity: 'DELIVERABLE',
+            sourceId: null,
+            planId: currentDeliverable.id,
+            path: `${target.name}/${targetTask.name}/${currentDeliverable.name}`,
+            before: {
+              name: currentDeliverable.name,
+              required: currentDeliverable.required,
+            },
+            after: null,
+          });
     }
     for (const [key, currentTask] of currentTasks)
       if (!targetTasks.has(key))
@@ -206,4 +321,13 @@ export function buildPlanDiff(
         after: null,
       });
   return diff;
+}
+
+function templateDefinition(template: TemplateLike): Record<string, unknown> {
+  return {
+    fileName: template.fileName,
+    mimeType: template.mimeType,
+    size: template.size.toString(),
+    checksum: template.checksum,
+  };
 }

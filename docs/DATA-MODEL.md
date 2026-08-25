@@ -1,5 +1,5 @@
 # 数据模型
 
-完整 Prisma 模型及索引说明见 [DATABASE.md](DATABASE.md)。V2 使用规范化关系模型，不以 JSON 作为正式业务数据库；JSON 字段只承载消息原文、AI 结果、报表快照等天然半结构化数据。
+完整 Prisma 模型、迁移和回滚说明见 [DATABASE.md](DATABASE.md)。V2 使用规范化关系模型；JSON 只承载 AI 原始结构化结果、变更 operation payload、消息原文和报表快照等天然半结构化数据。
 
-最重要的领域分离是 SopTask（模板要求）、ProjectPlanTask（项目执行快照）和 Task（实际工作项）。ProjectMember 独立于平台 Role，Document 独立于 DocumentVersion，MessageAnalysis/PendingAction 独立于正式业务实体。
+SopTask 是可版本化模板定义，ProjectWorkItem 是生成后的唯一执行事实，两者之间是快照来源关系，不是运行时双写。Document 与 DocumentVersion 分离，所有 AI/人工审查、问题项和准则结果绑定具体版本。ProjectBaseline 是批准计划快照，ProjectChangeRequest 只能经指定 approver 审批后事务应用并产生新基线。

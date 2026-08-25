@@ -37,7 +37,7 @@ export class DocumentsController {
   @Post('projects/:projectId/documents')
   @RequirePermissions(PERMISSIONS.DOCUMENT_UPLOAD)
   @RequireProjectAccess()
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024, files: 1 } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024, files: 1 } }))
   @ApiConsumes('multipart/form-data')
   @AuditAction('document.create', 'Document')
   create(
@@ -48,9 +48,22 @@ export class DocumentsController {
   ) {
     return this.service.create(user, projectId, dto, file);
   }
+  @Post('project-deliverables/:id/documents')
+  @RequirePermissions(PERMISSIONS.DOCUMENT_UPLOAD)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024, files: 1 } }))
+  @ApiConsumes('multipart/form-data')
+  @AuditAction('project.deliverable.document.upload', 'Document')
+  createForDeliverable(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: CreateDocumentDto,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.service.createForDeliverable(user, id, dto, file);
+  }
   @Post('documents/:id/versions')
   @RequirePermissions(PERMISSIONS.DOCUMENT_UPLOAD)
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024, files: 1 } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024, files: 1 } }))
   @ApiConsumes('multipart/form-data')
   @AuditAction('document.version.create', 'DocumentVersion')
   addVersion(
@@ -63,7 +76,7 @@ export class DocumentsController {
   }
   @Post('documents/:id/reviews')
   @RequirePermissions(PERMISSIONS.DOCUMENT_REVIEW)
-  @AuditAction('document.review', 'DocumentReview')
+  @AuditAction('document.review', 'DocumentVersionReview')
   review(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -76,6 +89,12 @@ export class DocumentsController {
   @AuditAction('document.submit', 'Document')
   submit(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.service.submit(user, id);
+  }
+  @Post('document-versions/:id/ai-review/retry')
+  @RequirePermissions(PERMISSIONS.DOCUMENT_REVIEW)
+  @AuditAction('document.ai-review.retry', 'DocumentVersion')
+  retryAiReview(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.service.retryAiReview(user, id);
   }
   @Get('document-versions/:id/download')
   @RequirePermissions(PERMISSIONS.DOCUMENT_VIEW)

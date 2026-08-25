@@ -46,7 +46,7 @@ async function navigate(
 
 test('navigates the responsive shell and reports unconfigured AI honestly', async ({ page }) => {
   await page.goto('/dashboard');
-  await expect(page.getByRole('heading', { name: '管理驾驶舱' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '管理驾驶舱' })).toBeVisible({ timeout: 15_000 });
   await navigate(page, '消息中心', '/messages');
   await expect(page.getByText('AI 服务未配置')).toBeVisible();
   await navigate(page, '集成配置', '/system/integrations');
