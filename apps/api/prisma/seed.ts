@@ -2,6 +2,7 @@ import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from '@pmp/shared-constants';
+import { seedPisImplementationSop } from './seed-sop-v1.9.2';
 
 const prisma = new PrismaClient();
 const permissionNames: Record<string, string> = {
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
     });
   const username = process.env.ADMIN_USERNAME;
   const password = process.env.ADMIN_PASSWORD;
+  let sopTemplateUploaderId: string | null = null;
   if (username && password) {
     if (password.length < 10) throw new Error('ADMIN_PASSWORD must contain at least 10 characters');
     const adminRole = await prisma.role.findUniqueOrThrow({ where: { code: 'ADMINISTRATOR' } });
@@ -82,7 +84,20 @@ async function main(): Promise<void> {
       create: { userId: user.id, roleId: adminRole.id },
       update: {},
     });
+    sopTemplateUploaderId = user.id;
   }
+  if (!sopTemplateUploaderId) {
+    const administrator = await prisma.user.findFirst({
+      where: {
+        status: 'ACTIVE',
+        deletedAt: null,
+        roles: { some: { role: { code: 'ADMINISTRATOR' } } },
+      },
+      select: { id: true },
+    });
+    sopTemplateUploaderId = administrator?.id ?? null;
+  }
+  await seedPisImplementationSop(prisma, sopTemplateUploaderId);
 }
 
 void main().finally(() => prisma.$disconnect());
