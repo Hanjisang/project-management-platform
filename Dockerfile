@@ -21,6 +21,8 @@ COPY --chown=node:node --from=build /app/apps/api/package.json ./apps/api/packag
 COPY --chown=node:node --from=build /app/apps/api/node_modules ./apps/api/node_modules
 COPY --chown=node:node --from=build /app/apps/api/dist ./apps/api/dist
 COPY --chown=node:node --from=build /app/apps/api/prisma ./apps/api/prisma
+# The runtime seed is executed through tsx and reuses the production StorageProvider implementation.
+COPY --chown=node:node --from=build /app/apps/api/src ./apps/api/src
 COPY --chown=node:node --from=build /app/packages ./packages
 RUN mkdir -p /app/storage && chown node:node /app/storage
 USER node
