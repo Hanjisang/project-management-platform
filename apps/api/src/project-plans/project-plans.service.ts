@@ -249,7 +249,7 @@ export class ProjectPlansService {
         !stage.sourceStageKey &&
         stage.workItems.every(
           (item) =>
-            item.sourceType === 'MANUAL' &&
+            ['MANUAL', 'MESSAGE'].includes(item.sourceType) &&
             item.isCustom &&
             item.status === 'TODO' &&
             item.progress === 0 &&

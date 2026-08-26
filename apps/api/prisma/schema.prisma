@@ -70,6 +70,9 @@ enum SourceType {
 enum WorkItemSourceType {
   SOP
   MANUAL
+  MESSAGE
+  ISSUE
+  ZENTAO
   CHANGE
 }
 
@@ -636,6 +639,7 @@ model ProjectWorkItem {
   progress                   Int                       @default(0) @db.UnsignedTinyInt
   required                   Boolean                   @default(true)
   sourceType                 WorkItemSourceType        @default(MANUAL) @map("source_type")
+  sourceId                   String?                   @map("source_id") @db.VarChar(80)
   sortOrder                  Int                       @map("sort_order")
   weight                     Int                       @default(0) @db.UnsignedTinyInt
   isCustom                   Boolean                   @default(false) @map("is_custom")
@@ -665,6 +669,7 @@ model ProjectWorkItem {
   @@index([sourceSopTaskKey])
   @@index([parentWorkItemId])
   @@index([ownerUserId, status])
+  @@index([sourceType, sourceId])
   @@index([cancelledByChangeRequestId])
   @@map("project_work_items")
 }

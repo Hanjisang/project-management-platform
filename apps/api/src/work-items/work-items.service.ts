@@ -455,10 +455,13 @@ export class WorkItemsService {
   }
 
   private present(item: WorkItemTree, provenance?: WorkItemProvenance) {
+    const persistedProvenance = item.sourceId
+      ? { sourceType: item.sourceType, sourceId: item.sourceId }
+      : undefined;
     return {
       ...item,
-      sourceType: provenance?.sourceType ?? item.sourceType,
-      sourceId: provenance?.sourceId,
+      sourceType: persistedProvenance?.sourceType ?? provenance?.sourceType ?? item.sourceType,
+      sourceId: persistedProvenance?.sourceId ?? provenance?.sourceId,
       checklistSummary: {
         completed: item.checklistItems.filter((entry) => entry.required && entry.completed).length,
         total: item.checklistItems.filter((entry) => entry.required).length,

@@ -195,6 +195,11 @@ describe.skipIf(!hasDatabase)('functional parity recovery against MySQL', () => 
     expect(savedAction.status).toBe('CONFIRMED');
     expect(savedAction.resultResourceType).toBe('ProjectWorkItem');
     expect(savedAction.resultResourceId).toBeTruthy();
+    const savedWorkItem = await prisma.projectWorkItem.findUniqueOrThrow({
+      where: { id: savedAction.resultResourceId ?? '' },
+    });
+    expect(savedWorkItem.sourceType).toBe('MESSAGE');
+    expect(savedWorkItem.sourceId).toBe(message.id);
 
     const plan = await prisma.projectPlan.findUnique({
       where: { projectId: project.id },
@@ -215,5 +220,33 @@ describe.skipIf(!hasDatabase)('functional parity recovery against MySQL', () => 
     expect(
       await prisma.projectWorkItem.count({ where: { projectId: project.id, name: '消息来源任务' } }),
     ).toBe(1);
+
+    const implementationSopVersion = await prisma.sopVersion.findFirstOrThrow({
+      where: {
+        status: 'PUBLISHED',
+        template: { code: 'PATHOLOGY_IMPLEMENTATION_STANDARD' },
+      },
+    });
+    await write(admin, 'post', `/api/v2/projects/${project.id}/plan`)
+      .send({ sopVersionId: implementationSopVersion.id })
+      .expect(201);
+    const adoptedWorkItem = await prisma.projectWorkItem.findUniqueOrThrow({
+      where: { id: savedWorkItem.id },
+    });
+    expect(adoptedWorkItem.sourceType).toBe('MESSAGE');
+    expect(adoptedWorkItem.sourceId).toBe(message.id);
+    expect(
+      await prisma.projectPlan.count({ where: { projectId: project.id } }),
+    ).toBe(1);
+
+    await prisma.projectWorkItem.update({
+      where: { id: savedWorkItem.id },
+      data: { sourceType: 'MANUAL', sourceId: null },
+    });
+    const legacyDetail = await admin.agent
+      .get(`/api/v2/work-items/${savedWorkItem.id}`)
+      .expect(200);
+    expect(legacyDetail.body.data.sourceType).toBe('MESSAGE');
+    expect(legacyDetail.body.data.sourceId).toBe(message.id);
   });
 });

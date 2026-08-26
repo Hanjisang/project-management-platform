@@ -70,7 +70,8 @@ export interface ProjectWorkItem {
   progress: number;
   weight: number;
   required: boolean;
-  sourceType: 'SOP' | 'MANUAL' | 'CHANGE';
+  sourceType: 'SOP' | 'MANUAL' | 'MESSAGE' | 'ISSUE' | 'ZENTAO' | 'CHANGE';
+  sourceId?: string;
   isCustom: boolean;
   plannedStartDate?: string;
   plannedEndDate?: string;
