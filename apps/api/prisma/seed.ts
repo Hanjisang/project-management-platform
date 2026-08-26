@@ -2,6 +2,7 @@ import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from '@pmp/shared-constants';
+import { seedImplementationSop } from './seed-implementation-sop';
 
 const prisma = new PrismaClient();
 const permissionNames: Record<string, string> = {
@@ -83,6 +84,10 @@ async function main(): Promise<void> {
       update: {},
     });
   }
+  const implementationSop = await seedImplementationSop(prisma);
+  console.log(
+    `[seed] implementation SOP ${implementationSop.created ? 'created' : 'already exists'}: ${JSON.stringify(implementationSop.counts)}`,
+  );
 }
 
 void main().finally(() => prisma.$disconnect());
