@@ -28,7 +28,7 @@ npm run dev
 
 当前版本的 AI、钉钉和禅道均为**预留集成接口**，生产运行不会主动连接这些外部服务，也不会伪造成功结果。核心项目管理、任务、Checklist、交付物和变更流程不依赖外部集成；正式交付物审核当前固定为人工审核。Fake AI 仅用于 `NODE_ENV=test` 下的契约与回归测试。
 
-`.env.example` 列出全部开发配置；至少需要数据库 URL、两个独立 JWT secret 和管理员初始账号。基础 seed 只创建权限、默认角色、知识分类和可选管理员；演示 SOP 必须显式运行：
+`.env.example` 列出全部开发配置；至少需要数据库 URL、两个独立 JWT secret 和管理员初始账号。基础 seed 会创建权限、默认角色、知识分类、可选管理员，以及内置的 `PATHOLOGY_IMPLEMENTATION_STANDARD`（病理信息化项目实施标准SOP，V1.9.1）。该 SOP 含 5 个阶段、36 个实施任务、162 个 Checklist、17 个正式 Deliverable 和 17 份可下载原始模板文件；模板上传者为不可登录的 `system-seed` 系统账号。演示 SOP 仍必须显式运行：
 
 ```bash
 npm run db:seed:demo
@@ -42,7 +42,7 @@ cp .env.deploy.example .env.deploy
 docker compose --env-file .env.deploy up --build -d
 ```
 
-Web 默认发布在 `http://localhost:8080`。API 容器启动时自动执行 Prisma 迁移和幂等基础种子；演示数据只通过 `npm run db:seed:demo` 显式导入。
+Web 默认发布在 `http://localhost:8080`。API 容器启动时自动执行 Prisma 迁移和幂等基础种子，并从 `apps/api/prisma/seed-assets/sop/v1.9.1/` 将正式套表写入 Storage；演示数据只通过 `npm run db:seed:demo` 显式导入。`doc/` 是制度与套表压缩包的原始资料来源，不是运行时依赖，也不会随 API 镜像部署。
 
 ## 常用命令
 
@@ -61,4 +61,4 @@ npm run build
 
 ## Production Acceptance
 
-2026-08-24 的 Functional Parity Recovery 已在 GitHub Actions 的 MySQL 8.4 隔离环境完成 5/5 migrations 与 seed，并通过 **100/100 Unit、37/37 Integration、11/11 Playwright E2E**，0 failed、0 skipped。`lint`、`typecheck`、`build`、API/Web Docker image build 与 `npm audit --audit-level=high` 均通过，依赖审计为 0 vulnerabilities。当前最大 JavaScript chunk 为 174.48 kB，gzip 67.27 kB。详见 [docs/V2-EXECUTION-ACCEPTANCE.md](docs/V2-EXECUTION-ACCEPTANCE.md)。
+Functional Parity Recovery 已合并到 `main`（merge commit `ea0d1b2de0f3869c142ab2794b6ec1326bf516a3`），合并后的 GitHub Actions V2 CI #181 成功。当前预置 SOP 分支本地验收在 Fresh MySQL 8.4 完成 6/6 migrations、两次幂等 seed，并通过 **104/104 Unit、43/43 Integration、15/15 Playwright E2E**，0 failed、0 skipped；`lint`、`typecheck`、`build`、API/Web Docker image build 与 `npm audit --audit-level=high` 均通过，依赖审计为 0 vulnerabilities。详见 [docs/V2-EXECUTION-ACCEPTANCE.md](docs/V2-EXECUTION-ACCEPTANCE.md)。

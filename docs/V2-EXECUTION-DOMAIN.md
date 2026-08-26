@@ -4,7 +4,7 @@
 
 项目执行只有一个实体：`ProjectWorkItem`。它同时承载计划节点、执行状态、负责人、日期、进度、层级和来源；Checklist、Deliverable、Document、Message Action 与 ZenTao Sync 都直接关联它。`SopTask` 只属于模板定义，项目生成后以稳定键和源 ID 保留来源快照。
 
-来源分为 `SOP`、`MANUAL`、`CHANGE`。SOP 生成和同步幂等；手工项用于临时工作；正式变更应用创建的项标记为 CHANGE。活动项目中，必需范围不能靠普通编辑删除或取消，必须走 Change Request。
+来源分为 `SOP`、`MANUAL`、`MESSAGE`、`ISSUE`、`ZENTAO`、`CHANGE`，新建的可溯源来源同时持久化 `sourceId`。SOP 生成和同步幂等；手工项用于临时工作；消息确认和正式变更直接保存真实来源。PendingAction 反查保留为旧数据兼容 fallback。活动项目中，必需范围不能靠普通编辑删除或取消，必须走 Change Request。
 
 ## 执行规则
 
