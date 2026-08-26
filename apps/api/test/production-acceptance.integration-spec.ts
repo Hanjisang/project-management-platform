@@ -566,7 +566,7 @@ describe.skipIf(!hasDatabase)('V2 unified execution domain against MySQL', () =>
     ).toBe(2);
     expect(
       await prisma.projectWorkItem.count({
-        where: { projectId, name: '退费接口对接', sourceType: 'CHANGE' },
+        where: { projectId, name: '退费接口对接', sourceType: 'CHANGE', sourceId: changeId },
       }),
     ).toBe(1);
     expect(

@@ -471,6 +471,7 @@ export class ProjectChangesService {
           plannedEndDate: payload.plannedEndDate,
           required: payload.required,
           sourceType: 'CHANGE',
+          sourceId: changeId,
           sortOrder: (aggregate._max.sortOrder ?? -1) + 1,
           isCustom: true,
           createdById: (

@@ -19,6 +19,25 @@ const execution = useQuery({
       attentionCounts: Record<string, number>;
     }>,
 });
+const sourceLabels: Record<ProjectWorkItem['sourceType'], string> = {
+  SOP: 'SOP',
+  MANUAL: '人工',
+  MESSAGE: '消息',
+  ISSUE: '问题',
+  ZENTAO: '禅道',
+  CHANGE: '变更',
+};
+const sourceTagTypes: Record<
+  ProjectWorkItem['sourceType'],
+  'primary' | 'success' | 'warning' | 'info' | 'danger'
+> = {
+  SOP: 'primary',
+  MANUAL: 'info',
+  MESSAGE: 'success',
+  ISSUE: 'danger',
+  ZENTAO: 'info',
+  CHANGE: 'warning',
+};
 function open(item: ProjectWorkItem): void {
   selectedId.value = item.id;
   drawer.value = true;
@@ -70,16 +89,9 @@ function open(item: ProjectWorkItem): void {
           @click="open(item)"
         >
           <div>
-            <el-tag
-              size="small"
-              :type="
-                item.sourceType === 'SOP'
-                  ? 'primary'
-                  : item.sourceType === 'CHANGE'
-                    ? 'warning'
-                    : 'info'
-              "
-              >{{ item.sourceType }}</el-tag
+            <el-tag size="small" :type="sourceTagTypes[item.sourceType]">{{
+              sourceLabels[item.sourceType]
+            }}</el-tag
             ><strong>{{ item.name }}</strong>
           </div>
           <span>{{ item.owner?.displayName ?? '未分配' }}</span>

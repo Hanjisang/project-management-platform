@@ -10,6 +10,7 @@
 - SOP Published 版本不可直接修改；项目生成独立快照。未启动且无执行/人工变更历史时可经过 Diff 安全同步；ACTIVE/PAUSED 项目不能直接重建计划绕过变更控制。
 - 项目在正式 SOP Plan 生成前可以创建人工临时 WorkItem；满足安全条件时，后续生成正式计划会吸收临时 Plan 并保留人工任务，而不是删除或复制执行事实。
 - Checklist 是 WorkItem 内的执行标准。正式 Deliverable 是一等实体，实际提交由 Document → DocumentVersion 承载；普通项目文档可以不绑定 Deliverable。
+- 基础 seed 内置 `PATHOLOGY_IMPLEMENTATION_STANDARD` V1.9.1。正式制度和压缩包位于原始资料目录 `doc/`；部署只依赖 `apps/api/prisma/seed-assets/sop/v1.9.1/` 中保持原格式的 17 份模板。Seed 通过 Local Storage Provider 写入真实对象并保存 size/SHA-256，已发布版本存在时不覆盖用户修改。
 - Required Checklist 与 Required Deliverable 按等单位进入同一进度分母；Deliverable 最新版本上传贡献 0.5，最终人工批准贡献 1。
 - 进度、有效审核状态、最新版本等派生事实由 API 后端计算，前端多个入口只展示/操作同一份数据。
 
@@ -20,6 +21,7 @@
 - 重大范围变化（阶段、Required/Core WorkItem、Required Checklist、Required Deliverable、验收/审核标准等）始终走 CR。
 - CR 的 `APPROVED` 与 `APPLIED` 分离；Apply 事务化、幂等，并在应用后重算 WorkItem → Stage → Plan → Project。
 - ACTIVE/PAUSED 项目中的非必需人工临时任务允许免 CR 的直接调整，但结构性新增/修改/取消仅允许项目经理（管理员例外）。
+- WorkItem 来源直接持久化为 `SOP`、`MANUAL`、`MESSAGE`、`ISSUE`、`ZENTAO` 或 `CHANGE`；新建的可溯源来源同时写入 `sourceId`。PendingAction 反查只作为旧数据兼容 fallback。
 
 ## 文档与存储
 

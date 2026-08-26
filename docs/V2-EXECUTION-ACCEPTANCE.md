@@ -1,15 +1,15 @@
 # V2 Functional Parity Recovery + Execution Domain Acceptance
 
-验收日期：2026-08-24。分支：`fix/functional-parity-recovery`。
+验收日期：2026-08-24；实施 SOP 预置复验日期：2026-08-26。
 
-结论：本轮已完成 Execution Domain 收口与重构后功能等价性恢复。ProjectWorkItem 继续作为项目计划与任务中心的唯一执行事实源，同时恢复重构前未明确废弃的用户能力。GitHub Actions 完整质量流水线通过，可进入 UAT；本分支仍保持 Draft，未合并到 `main`。
+结论：Execution Domain 收口与功能等价性恢复已合并到 `main`，merge commit 为 `ea0d1b2de0f3869c142ab2794b6ec1326bf516a3`，合并后的 GitHub Actions V2 CI #181 成功。ProjectWorkItem 继续作为项目计划与任务中心的唯一执行事实源，同时保留重构前未明确废弃的用户能力。该结论证明代码达到 UAT 准入，尚未发布生产。
 
 ## 1. 执行域与功能等价性
 
 - `SopTask` 仅作为 SOP 定义；项目生成后实际执行统一落到 `ProjectWorkItem`，不恢复 `ProjectPlanTask + Task` 双事实源。
 - SOP Published 版本不可直接修改；项目持有独立计划快照，不实时读取后续 SOP 定义。
 - 项目可以在尚未生成正式 SOP 计划前创建人工临时任务。后续生成正式计划时，安全的临时 Plan 会被正式 SOP Plan 吸收，人工 WorkItem 原 ID/状态保留，项目仍只有一个 ProjectPlan。
-- Message Confirm 创建任务同样不依赖既有 SOP Plan：没有计划时自动建立“项目自定义执行计划 / 临时任务”，并通过既有 PendingAction 结果关联向 WorkItem API 暴露 `sourceType=MESSAGE` 与 `sourceId=messageId`，重复确认保持幂等。
+- Message Confirm 创建任务同样不依赖既有 SOP Plan：没有计划时自动建立“项目自定义执行计划 / 临时任务”，数据库直接持久化 `sourceType=MESSAGE` 与 `sourceId=messageId`，重复确认保持幂等；既有 PendingAction 结果关联继续作为旧数据兼容 fallback。
 - 实施计划页恢复直接操作 Checklist、编辑同一 ProjectWorkItem 的负责人/计划起止日期、下载交付模板、上传首版/新版本交付物、人工通过/驳回；任务抽屉和任务中心仍读取同一 ProjectWorkItem / ProjectDeliverable / Document 数据，不建立第二套状态。
 - `PLAN_EDIT` 可用于计划页的负责人/计划日期与 Checklist 操作，但不能借此越权修改任务标题、说明、优先级、状态、进度或执行取消；完整任务编辑仍要求 `TASK_EDIT`。
 - 普通项目文档与正式 Deliverable 文档继续共存：Deliverable 关联用于正式交付，普通文档不要求绑定 Deliverable。普通文档设置 `required=true` 后成为项目结项必需资料，只有 `APPROVED` 才解除结项阻断；DRAFT / PENDING_REVIEW / REJECTED 均阻断结项。
@@ -48,27 +48,29 @@
 
 - StorageProvider 继续隔离实际对象存储；LocalStorage 已实现，路径穿越/文件类型/大小等校验保留。
 - 文件物理删除失败会写入 `StorageCleanupJob`；清理 Worker 服务启动时执行一轮，之后周期重试，通过 `id + attempts` 乐观抢占避免同一轮重复处理，成功写 `completedAt`，失败保留 `lastError`，最多重试 10 次。
-- `templates/templates.7z` 不属于本轮提交内容，未作为运行依赖处理。
+- 基础 seed 内置 `PATHOLOGY_IMPLEMENTATION_STANDARD` V1.9.1：5 Stage、36 Task、162 Checklist、17 Deliverable、17 人工审核 Criterion、17 个真实模板文件。
+- `doc/` 仅作为正式制度和套表压缩包的原始来源；运行时使用 `apps/api/prisma/seed-assets/sop/v1.9.1/`，API Docker 镜像已核验包含全部 17 个文件。
+- 模板通过 Local Storage Provider 写入 Storage 并保存真实 size/SHA-256；已发布版本存在时 seed 只检查并告警，不覆盖或删除用户修改。
 
 ## 6. 最终 CI 验收证据
 
-GitHub Actions V2 CI #176（代码 HEAD `4554e10586f395381ca79bf1733a4c834877e911`）完整通过：
+Functional Parity Recovery 合并后的 GitHub Actions V2 CI #181 完整通过。本次实施 SOP 预置分支在 Fresh MySQL 8.4 本地复验：
 
 - npm install / dependency audit：通过，0 vulnerabilities。
 - lint：通过。
 - typecheck：通过。
 - Unit：**104/104 passed**，28 个 test files，0 failed、0 skipped。
-- Fresh MySQL 8.4：发现并成功应用 **5/5 migrations**，随后 seed 成功。
-- Integration：**39/39 passed**，5 个 integration files，0 failed、0 skipped；新增 Functional Parity 专项真实 MySQL 验证普通 required 文档结项 blocker、无 SOP Plan 的 Message → WorkItem 创建与幂等来源追溯。
+- Fresh MySQL 8.4：发现并成功应用 **6/6 migrations**；连续两次 seed 数量均为 `5 Stage / 36 Task / 162 Checklist / 17 Deliverable / 17 TemplateFile`。
+- Integration：**43/43 passed**，6 个 integration files，0 failed、0 skipped；新增验证预置 SOP 结构与幂等、项目计划快照、DOCX/XLSX 下载 checksum，以及 Message → WorkItem 数据库来源追溯。
 - build：API/Web/共享包全部通过。
 - Web 当前最大 JavaScript chunk：174.48 kB，gzip 67.27 kB。
 - Playwright：**15/15 passed**，除原核心生产业务流/安全/响应式导航外，新增验证 Dashboard 旧指标并存、实施计划直接修改同一 WorkItem 日期、取消任务保留历史、普通 required 文档人工审核后解除结项阻断。
-- Container job：Docker Compose config、API image build、Web image build 全部通过。
+- Docker Compose config、API image build、Web image build 全部通过；API 运行时镜像内存在 17/17 seed assets。
 
 ## 7. 已知非阻断事项
 
 - 尚未执行独立的 `50 WorkItem / 300 Checklist / 100 Deliverable` 专项负载基准，因此不对该规模给出量化性能承诺；Execution API 已采用聚合读取，后续 UAT 可补专项测量。
 - AI/DingTalk/ZenTao 不是“等待配置凭证即可上线”的当前功能，而是本版本**明确未启用**的扩展接口；启用时应作为后续受控版本重新测试。
-- 本验收只证明该 Draft 分支达到 UAT 准入，不代表已经合并、发布或部署到生产。
+- 本验收证明功能等价性恢复已合并主线、实施 SOP 预置分支达到 UAT 准入；两者均不代表已经发布或部署到生产。
 
 发布前历史备份仍保留：`.backups/pre_execution_redesign_20260824_complete.sql`。如执行与旧双轨表删除相关的数据库级回滚，必须结合对应数据库备份/迁移策略处理。
